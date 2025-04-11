@@ -1,69 +1,90 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { Signaler } from '$lib/signaler';
-	import { getRandomNumber, capitalize } from '$lib/utils';
-	import { onMount } from 'svelte';
-
-	let signaler: Signaler | undefined = $state();
-
-	onMount(() => {
-		signaler = new Signaler();
-	});
-
-	const names = [
-		'John',
-		'Amy',
-		'Sarah',
-		'Michael',
-		'Jessica',
-		'David',
-		'Emily',
-		'Daniel',
-		'Sophia',
-		'Chris'
-	];
-
-	const name = names[getRandomNumber(names.length - 1)];
+	import type { ClientToServerEvents, ServerToClientEvents } from '$lib/signaler';
+	import { io, type Socket } from 'socket.io-client';
+	import { onDestroy } from 'svelte';
 
 	const circleId = page.params.slug;
-	const messages: { user: string; content: string }[] = $state([]);
 
-	const onsubmit = (event: SubmitEvent) => {
-		event.preventDefault();
-		const formData = new FormData(event.target as HTMLFormElement);
-		const message = formData.get('message')?.valueOf() as string;
+	let connected: boolean = $state(false);
+	let socket: Socket<ServerToClientEvents, ClientToServerEvents> | undefined = $state();
+	let peerId: string | undefined = $state('n/a');
+	let messages: string[] = $state([]);
 
-		messages.push({
-			user: name,
-			content: message
+	const connect = () => {
+		messages.push('connecting the websocket to the server...');
+		socket = io(`ws://127.0.0.1:5000?circleId=${circleId}`, {
+			reconnectionAttempts: 2
+		});
+
+		socket.on('connect', () => {
+			messages.push('connected to the websocket...');
+			connected = true;
+			peerId = socket!.id;
+		});
+
+		socket.on('connect_error', (err) => {
+			messages.push(`Error while attempting connection ${err}`);
+		});
+
+		socket.on('disconnect', (reason) => {
+			messages.push(`Disconnected from socket. Reason provided is ${reason}`);
+			connected = false;
+		});
+
+		socket.on('newRoomMember', (peerId) => {
+			messages.push(`New room member -> id: ${peerId}`);
+		});
+
+		socket.onAny((event) => {
+			console.log(event);
+			messages.push(event);
 		});
 	};
+
+	const disconnect = () => {
+		messages.push('disconnecting the websocket from the server...');
+
+		if (!socket) {
+			messages.push('socket does not exist, nothing to disconnect from');
+			return;
+		}
+
+		connected = false;
+		peerId = 'n/a';
+
+		socket.disconnect();
+	};
+
+	onDestroy(() => {});
 </script>
 
 <div class="flex flex-col items-center pt-8">
-	<h1 class="font-mono text-3xl font-bold text-blue-600">Welcome to circle {circleId}</h1>
-	<div class="mt-12 w-full max-w-md rounded-lg bg-gray-100 p-4 pt-8 shadow-md">
-		<ul class="space-y-4">
+	<h1 class="text-center font-mono text-2xl font-bold text-blue-600">Circle <br /> {circleId}</h1>
+	<div>
+		<p class="mt-7 text-shadow-blue-50"><b>You are</b>: {peerId}</p>
+		<p class="mb-7 text-shadow-blue-50"><b>connected to room?</b> {connected}</p>
+	</div>
+	<div class="flex flex-row">
+		<button
+			class="col-span-2 mx-8 h-12 w-full rounded bg-blue-500 px-4 py-2 font-bold text-white hover:bg-blue-700"
+			onclick={connect}>connect</button
+		>
+		<button
+			class="col-span-2 mx-8 h-12 w-full rounded bg-blue-500 px-4 py-2 font-bold text-white hover:bg-blue-700"
+			onclick={disconnect}>disconnect</button
+		>
+		<button
+			class="col-span-2 mx-8 h-12 w-full rounded bg-blue-500 px-4 py-2 font-bold text-white hover:bg-blue-700"
+			onclick={() => (messages = [])}>clear</button
+		>
+	</div>
+	<div class="mt-8 min-w-1">
+		<ul>
 			{#each messages as message}
-				<li class="flex flex-col rounded-lg bg-white p-3 shadow-sm">
-					<span class="font-semibold text-blue-600">{capitalize(message.user)}</span>
-					<span class="text-gray-700">{message.content}</span>
-				</li>
+				<li class="m-2 min-w-120 font-mono">{message}</li>
+				<hr class="solid" />
 			{/each}
 		</ul>
-		<form {onsubmit} class="pt-8">
-			<input
-				type="text"
-				name="message"
-				placeholder="Enter a message"
-				class="h-12 w-full rounded-md bg-white px-2"
-				required
-			/>
-			<button
-				type="submit"
-				class="mt-4 h-12 w-full rounded bg-blue-500 px-2 font-bold text-white hover:bg-blue-700"
-				>Send message</button
-			>
-		</form>
 	</div>
 </div>
