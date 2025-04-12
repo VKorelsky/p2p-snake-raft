@@ -1,19 +1,33 @@
 import { io, Socket } from 'socket.io-client';
 
+export interface newOfferEvent {
+	fromPeerId: string;
+	offer: any;
+}
+
+export interface newAnswerEvent {
+	fromPeerId: string;
+	answer: any;
+}
+
+export interface newIceCandidateEvent {
+	fromPeerId: string;
+	newIceCandidate: any;
+}
+
 export interface ClientToServerEvents {
 	joinCircle: (circleId: string) => void;
 	leaveCircle: (circleId: string) => void;
 	sendOffer: (toPeerId: string, offer: any) => void;
 	sendAnswer: (toPeerId: string, offer: any) => void;
-	// for now we assume that we can broadcast our ICE candidate to everyone equally
-	broadcastIceCandidate: (iceCandidate: any) => void;
+	sendIceCandidate: (toPeerId: string, iceCandidate: any) => void;
 }
 
 export interface ServerToClientEvents {
 	newRoomMember: (newPeerId: string) => void;
-	newOffer: (toPeerId: string, offer: any) => void;
-	newAnswer: (toPeerId: string, answer: any) => void;
-	newIceCandidate: (toPeerId: string, iceCandidate: any) => void;
+	newOffer: (event: newOfferEvent) => void;
+	newAnswer: (event: newAnswerEvent) => void;
+	newIceCandidate: (event: newIceCandidateEvent) => void;
 }
 
 export class Signaler {
@@ -39,8 +53,8 @@ export class Signaler {
 		this.socket.emit('sendAnswer', toPeerId, answer);
 	}
 
-	public broadcastIceCandidate(iceCandidate: any) {
-		this.socket.emit('broadcastIceCandidate', iceCandidate);
+	public sendIceCandidate(toPeerId: string, iceCandidate: any) {
+		this.socket.emit('sendIceCandidate', toPeerId, iceCandidate);
 	}
 
 	public onConnect(listener: () => void) {
@@ -51,16 +65,16 @@ export class Signaler {
 		this.socket.on('newRoomMember', listener);
 	}
 
-	public onNewOffer(listener: (toPeerId: string, offer: any) => void) {
+	public onNewOffer(listener: (fromPeerId: string, offer: any) => void) {
 		this.socket.on('newOffer', listener);
 	}
 
-	public onNewAnswer(listener: (toPeerId: string, answer: any) => void) {
+	public onNewAnswer(listener: (fromPeerId: string, answer: any) => void) {
 		this.socket.on('newAnswer', listener);
 	}
 
 	public onNewIceCandidate(
-		listener: (toPeerId: string, iceCandidate: any) => void
+		listener: (fromPeerId: string, newIceCandidate: any) => void
 	) {
 		this.socket.on('newIceCandidate', listener);
 	}
