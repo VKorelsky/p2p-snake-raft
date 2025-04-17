@@ -20,23 +20,43 @@
 	let messages: string[] = $state([]);
 
 	// rtc connection stuff
-	let peerConnection: RTCPeerConnection | undefined = $state();
+	let connection: RTCPeerConnection | undefined = $state();
 	let otherPeerId: string | undefined = $state();
-	let dataChannel: RTCDataChannel | undefined = $state();
+	let channel: RTCDataChannel | undefined = $state();
 
 	// next step
-	// tests
-	// exchange data from one to the other
+	// Send a message on the data channel from one peer to another
 	// strongly type everything. Also handle better the case where the peer connection could be undefined
 	// move functionality to dedicated classes (signaler, peerConnection, peerConnectionPool)
 
 	const sendOfferToPeer = async (toPeerId: string): Promise<void> => {
-		if (!socket) {
-			throw new Error('Socket must be initialized before sending any offer through');
+		if (!socket || !connection) {
+			throw new Error('Socket and Connection must be initialized before sending any offer through');
 		}
+		
+		channel = connection.createDataChannel('messaging channel');
 
-		const offer = await peerConnection!.createOffer();
-		await peerConnection!.setLocalDescription(offer);
+		const offer = await connection.createOffer();
+		await connection.setLocalDescription(offer);
+
+		channel.addEventListener('open', (event) => {
+			console.log('Channel open event:' + event);
+			console.log('Channel object:' + channel);
+
+			messages.push(`Data connection channel open with peer ${otherPeerId}`);
+		});
+
+		channel.addEventListener('message', (event: any) => {
+			console.log('Received new message event on data channel' + event);
+
+			const message = event.data;
+			messages.push(`[${otherPeerId}] ${message}`);
+		});
+
+		channel.addEventListener('error', (e) => {
+			debugger;
+			console.log('Error on data channel' + e);
+		});
 
 		messages.push(`Sending offer to peer with id ${toPeerId}`);
 		socket.emit('sendOffer', toPeerId, offer);
@@ -54,8 +74,7 @@
 	const handleNewIceCandidate = async (event: newIceCandidateEvent): Promise<void> => {
 		try {
 			messages.push(`Received new ice candidate from peer with id ${event.fromPeerId}`);
-			console.log('New remote ice candidate:', event.newIceCandidate);
-			await peerConnection!.addIceCandidate(event.newIceCandidate);
+			await connection!.addIceCandidate(event.newIceCandidate);
 		} catch (error: any) {
 			console.error('Error adding new ice candidate for peer connection', error);
 		}
@@ -64,20 +83,19 @@
 	const handleAnswerFromPeer = async (event: newAnswerEvent): Promise<void> => {
 		messages.push(`Got answer from peer with id ${event.fromPeerId}`);
 		const remotePeerDescription = new RTCSessionDescription(event.answer);
-		await peerConnection!.setRemoteDescription(remotePeerDescription);
+		await connection!.setRemoteDescription(remotePeerDescription);
 	};
 
 	const handleOfferFromPeer = async (event: newOfferEvent): Promise<void> => {
-		console.log('Offer from peer:', event);
-
 		if (!socket) {
 			throw new Error('Socket must be initialized before sending any answer through');
 		}
 
+		otherPeerId = event.fromPeerId;
 		messages.push(`Got offer from peer with ID ${event.fromPeerId}`);
-		peerConnection!.setRemoteDescription(new RTCSessionDescription(event.offer));
-		const answer = await peerConnection!.createAnswer();
-		await peerConnection!.setLocalDescription(answer);
+		connection!.setRemoteDescription(new RTCSessionDescription(event.offer));
+		const answer = await connection!.createAnswer();
+		await connection!.setLocalDescription(answer);
 
 		messages.push(`Sending back answer to peer with ID ${event.fromPeerId}`);
 		socket.emit('sendAnswer', event.fromPeerId, answer);
@@ -89,9 +107,9 @@
 
 		if (socket) {
 			// type RTCPeerConnectionState = "closed" | "connected" | "connecting" | "disconnected" | "failed" | "new";
-			if (peerConnection!.connectionState !== 'new') {
-				peerConnection!.close();
-				peerConnection = new RTCPeerConnection(rtcConfig);
+			if (connection!.connectionState !== 'new') {
+				connection!.close();
+				connection = new RTCPeerConnection(rtcConfig);
 			}
 
 			sendOfferToPeer(newPeerId);
@@ -129,8 +147,6 @@
 	};
 
 	const newWebRtcConnection = () => {
-		console.log('Creating new RTC peer connection object');
-
 		const rtcConfig = {
 			iceServers: [
 				{
@@ -159,65 +175,50 @@
 			]
 		};
 
-		peerConnection = new RTCPeerConnection(rtcConfig);
+		connection = new RTCPeerConnection(rtcConfig);
 
-		peerConnection!.addEventListener('connectionstatechange', (event) => {
+		connection!.addEventListener('connectionstatechange', (event) => {
 			messages.push(`Change to the RTC connection status, please check the console`);
-			console.log('New connection change event:', event);
-			if (peerConnection!.connectionState === 'connected') {
+			if (connection!.connectionState === 'connected') {
 				messages.push(`Connected to peer with ID ${otherPeerId}, hello world!`);
 				connectedToPeer = true;
 			}
 
-			if (peerConnection!.connectionState === 'failed') {
+			if (connection!.connectionState === 'failed') {
 				messages.push('Connection to peer failed..');
 			}
 		});
 
-		peerConnection!.addEventListener('icecandidateerror', (event) => {
-			// messages.push(`ICE candidate error: ${event.errorText}`);
-			console.error('ICE candidate error:', event);
+		connection!.addEventListener('icecandidateerror', (event) => {
+			messages.push(`ICE candidate error: ${event.errorText}`);
 		});
 
-		peerConnection!.addEventListener('negotiationneeded', (event) => {
-			console.log('Negotiation needed event:', event);
-		});
-
-		peerConnection!.addEventListener('signalingstatechange', () => {
-			if (peerConnection!.signalingState === 'closed') {
-				messages.push('Signaling state closed');
-			}
-			console.log('Signaling state changed to:', peerConnection!.signalingState);
-		});
-
-		peerConnection!.addEventListener('iceconnectionstatechange', () => {
-			const state = peerConnection!.iceConnectionState;
+		connection!.addEventListener('iceconnectionstatechange', () => {
+			const state = connection!.iceConnectionState;
 			messages.push(`ICE connection state changed to: ${state}`);
 
 			if (state === 'failed' || state === 'disconnected' || state === 'closed') {
 				messages.push('ICE connection failed or closed');
 				connectedToPeer = false;
 			}
-			console.log('ICE connection state:', state);
 		});
 
-		peerConnection!.addEventListener('icecandidate', (event) => {
-			console.log('New local ice candidate:', {
-				event,
-				'candidate?': event.candidate,
-				'otherPeerId?': otherPeerId
-			});
-
+		connection!.addEventListener('icecandidate', (event) => {
+			messages.push(`New local ice candidate...`);
 			if (event.candidate && otherPeerId) {
 				sendNewIceCandidate(otherPeerId, event.candidate);
 			}
 		});
 
-		dataChannel = peerConnection.createDataChannel('messaging channel');
+		connection.addEventListener('datachannel', (event: any) => {
+			messages.push(`New data channel initialized by peer...`);
+			channel = event.channel;
+			channel?.addEventListener('message', (event: any) => {
+				console.log('Received new message event on data channel' + event);
 
-		dataChannel.addEventListener('open', (event) => {
-			console.log(event);
-			messages.push(`Data connection channel open with peer ${otherPeerId}!! DOUBLE hello world`);
+				const message = event.data;
+				messages.push(`[${otherPeerId}] ${message}`);
+			});
 		});
 	};
 
@@ -233,9 +234,9 @@
 		peerId = 'n/a';
 
 		socket.disconnect();
-		if (peerConnection!.connectionState !== 'closed') {
+		if (connection!.connectionState !== 'closed') {
 			messages.push('Disconnecting from the other peer');
-			peerConnection!.close();
+			connection!.close();
 			newWebRtcConnection();
 		}
 	};
@@ -247,6 +248,26 @@
 	onDestroy(() => {
 		disconnect();
 	});
+
+	const onNewMessage = (e: SubmitEvent) => {
+		// prevent form submission
+		e.preventDefault();
+		const form = e.target as HTMLFormElement;
+		const data = new FormData(form);
+		const message = data.get('message') as string;
+
+		if (connection && otherPeerId && message) {
+			sendMessage(otherPeerId, message);
+		}
+	};
+
+	const sendMessage = async (toPeerId: string, message: string) => {
+		messages.push(`[You] - ${message}`);
+		console.log('dataChannel' + channel);
+		console.log('sending new message' + message);
+		// TODO specify a peer
+		channel!.send(message);
+	};
 </script>
 
 <div class="flex flex-col items-center pt-8">
@@ -270,6 +291,14 @@
 			onclick={() => (messages = [])}>clear</button
 		>
 	</div>
+	<form action="/" class="mt-8 flex flex-row items-center justify-center" onsubmit={onNewMessage}>
+		<input class="rounded-md border p-1" type="text" name="message" id="message" />
+		<input
+			class="col-span-2 mx-8 h-12 w-full rounded bg-blue-500 px-4 py-2 font-bold text-white hover:bg-blue-700"
+			type="submit"
+			value="send message"
+		/>
+	</form>
 	<div class="mt-8 min-w-1">
 		<ul>
 			{#each messages.slice().reverse() as message, i}
