@@ -34,13 +34,19 @@ export class Signaler {
 	private socket: Socket<ServerToClientEvents, ClientToServerEvents>;
 
 	public constructor(circleId: string) {
-		this.socket = io(this.buildSocketUrl(circleId));
+		this.socket = io(this.buildSocketUrl(circleId), {
+			reconnectionAttempts: 2,
+			// restrict to websockets as when the server restarts, socket io switches to long polling
+			// which triggers CORS blocking by the browser for some reason
+			transports: ['websocket']
+		});
 	}
 
 	private buildSocketUrl(circleId: string): string {
 		return `ws://127.0.0.1:5000?circleId=${circleId}`;
 	}
 
+	// ====== CLIENT TO SERVER HANDLERS ====== //
 	public leaveCircle(circleId: string) {
 		this.socket.emit('leaveCircle', circleId);
 	}
@@ -57,25 +63,40 @@ export class Signaler {
 		this.socket.emit('sendIceCandidate', toPeerId, iceCandidate);
 	}
 
-	public onConnect(listener: () => void) {
-		this.socket.on('connect', listener);
+	// ====== SOCKET ADMIN ======
+	public onConnect(listener: (sessionIdentifier: string) => void) {
+		this.socket.on('connect', () => {
+			const sessionIdentifier = this.socket!.id!;
+			listener(sessionIdentifier);
+		});
 	}
 
+	public onConnectError(listener: (error: Error) => void) {
+		this.socket.on('connect_error', listener);
+	}
+
+	public onDisconnect(listener: (reason: string) => void) {
+		this.socket.on('disconnect', listener);
+	}
+
+	// ====== SERVER TO CLIENT HANDLERS ======
+	// Type challenge
+	// a generic on function that accepts the event name as the first parameter and it's corresponding payload 
+	// as the second parameter
 	public onNewRoomMember(listener: (newPeerId: string) => void) {
+		// TODO change this to new circle member instead of new room member
 		this.socket.on('newRoomMember', listener);
 	}
 
-	public onNewOffer(listener: (fromPeerId: string, offer: any) => void) {
+	public onNewOffer(listener: (event: newOfferEvent) => void) {
 		this.socket.on('newOffer', listener);
 	}
 
-	public onNewAnswer(listener: (fromPeerId: string, answer: any) => void) {
+	public onNewAnswer(listener: (event: newAnswerEvent) => void) {
 		this.socket.on('newAnswer', listener);
 	}
 
-	public onNewIceCandidate(
-		listener: (fromPeerId: string, newIceCandidate: any) => void
-	) {
+	public onNewIceCandidate(listener: (event: newIceCandidateEvent) => void) {
 		this.socket.on('newIceCandidate', listener);
 	}
 
