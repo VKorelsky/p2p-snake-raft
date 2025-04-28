@@ -51,6 +51,7 @@ export class PeerConnection extends EventTarget {
 			});
 		});
 
+		this.signaler.onNewIceCandidate(this.getNewIceCandidateHandler());
 		this.signaler.sendAnswer(this.peerId, answer);
 	}
 
@@ -145,12 +146,17 @@ export class PeerConnection extends EventTarget {
 			}
 		});
 
-		this.connection.addEventListener('icecandidateerror', () => {});
+		this.connection.addEventListener('icecandidateerror', (event) => {
+			console.log('ICE candidate error:', event);
+		});
 
-		this.connection.addEventListener('iceconnectionstatechange', () => {});
+		this.connection.addEventListener('iceconnectionstatechange', (event) => {
+			console.log('ICE connection state change:', event);
+		});
 
 		this.connection.addEventListener('icecandidate', (event) => {
 			if (event.candidate) {
+				console.log("New local ice candidate...")
 				this.signaler.sendIceCandidate(this.peerId, event.candidate);
 
 				// Dispatch iceCandidateSent event
@@ -175,9 +181,9 @@ export class PeerConnection extends EventTarget {
 	}
 
 	private getNewIceCandidateHandler() {
-		return (event: newIceCandidateEvent) => {
+		return async (event: newIceCandidateEvent) => {
 			if (event.fromPeerId === this.peerId) {
-				this.connection.addIceCandidate(event.newIceCandidate);
+				await this.connection.addIceCandidate(event.newIceCandidate);
 
 				// Dispatch iceCandidateReceived event
 				const iceCandidateReceivedEvent = new CustomEvent('iceCandidateReceived', {

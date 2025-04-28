@@ -1,12 +1,8 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { rtcConfig } from '$lib/config/local';
 	import { PeerConnection } from '$lib/peerPool';
-	// import { PeerConnection } from '$lib/peerPool';
 	import {
 		Signaler,
-		type newAnswerEvent,
-		type newIceCandidateEvent,
 		type newOfferEvent
 	} from '$lib/signaler';
 	import { onDestroy, onMount } from 'svelte';
@@ -103,6 +99,7 @@
 		// TODO type the whole event listener thing etc
 		connection.addEventListener('connectionEstablished', (event: any) => {
 			console.log(event);
+            connectedToPeer = true;
 			messages.push('Connection to peer established');
 		});
 
@@ -123,12 +120,12 @@
 		});
 
 		connection.addEventListener('iceCandidateSent', (event: any) => {
-			console.log(event);
+			console.log("ice candidate sent:" + event);
 			messages.push(`Sent ICE candidate to peer ${event.detail.peerId}`);
 		});
 
 		connection.addEventListener('iceCandidateReceived', (event: any) => {
-			console.log(event);
+			console.log("ice candidate received:" + event);
 			messages.push(`Received ICE candidate from peer ${event.detail.peerId}`); 
 		});
 
