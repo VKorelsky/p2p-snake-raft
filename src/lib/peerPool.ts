@@ -7,14 +7,14 @@ import type { newAnswerEvent, newIceCandidateEvent, Signaler } from './signaler'
 // "newMessage"
 // "disconnected"
 
-class PeerConnection extends EventTarget {
+export class PeerConnection extends EventTarget {
 	private selfId: string;
 	private peerId: string;
 	private connection: RTCPeerConnection;
 	private dataChannel: RTCDataChannel | undefined;
 	private signaler: Signaler;
 
-	private constructor(selfId: string, peerId: string, signaler: Signaler) {
+	public constructor(selfId: string, peerId: string, signaler: Signaler) {
 		super();
 		this.selfId = selfId;
 		this.peerId = peerId;
@@ -22,6 +22,10 @@ class PeerConnection extends EventTarget {
 		this.connection = new RTCPeerConnection(rtcConfig);
 
 		this.setupConnection();
+	}
+
+	public getOtherPeerId() {
+		return this.peerId;
 	}
 
 	public async respond(sessionDescription: RTCSessionDescription) {
@@ -36,10 +40,11 @@ class PeerConnection extends EventTarget {
 
 				const newMessageEvent = new CustomEvent('newMessage', {
 					detail: {
+						peerId: this.peerId,
 						message: event.data
 					}
 				});
-	
+
 				this.dispatchEvent(newMessageEvent);
 			});
 		});
@@ -53,6 +58,7 @@ class PeerConnection extends EventTarget {
 		const offer = await this.connection.createOffer();
 		await this.connection.setLocalDescription(offer);
 
+		// TODO perhaps it's here that we should be setting the initiate connection to true
 		this.dataChannel.addEventListener('open', (event) => {
 			console.log('Channel open event:' + event);
 			console.log('Channel object:' + this.dataChannel);
@@ -63,6 +69,7 @@ class PeerConnection extends EventTarget {
 
 			const newMessageEvent = new CustomEvent('newMessage', {
 				detail: {
+					peerId: this.peerId,
 					message: event.data
 				}
 			});
@@ -78,6 +85,16 @@ class PeerConnection extends EventTarget {
 		this.signaler.onNewIceCandidate(this.getNewIceCandidateHandler());
 
 		this.signaler.sendOffer(this.peerId, offer);
+	}
+
+	public close() {
+		if (this.dataChannel) {
+			this.dataChannel.close();
+		}
+
+		if (this.connection) {
+			this.connection.close();
+		}
 	}
 
 	public sendMessage(message: string) {
@@ -106,13 +123,23 @@ class PeerConnection extends EventTarget {
 			}
 
 			if (this.connection.connectionState === 'failed') {
-				const connectionFailedEvent = new CustomEvent('connectionFailedEvent', {
+				const connectionFailedEvent = new CustomEvent('connectionFailed', {
 					detail: {
 						peerId: this.peerId
 					}
 				});
 
 				this.dispatchEvent(connectionFailedEvent);
+			}
+
+			if (this.connection.connectionState === 'closed') {
+				const disconnectedEvent = new CustomEvent('disconnected', {
+					detail: {
+						peerId: this.peerId
+					}
+				});
+
+				this.dispatchEvent(disconnectedEvent);
 			}
 		});
 
