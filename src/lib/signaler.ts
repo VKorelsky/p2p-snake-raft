@@ -30,7 +30,7 @@ export interface ServerToClientEvents {
 	newIceCandidate: (event: newIceCandidateEvent) => void;
 }
 
-export class Signaler {
+export class Signaler implements EventTarget {
 	private socket: Socket<ServerToClientEvents, ClientToServerEvents>;
 
 	public constructor(circleId: string) {

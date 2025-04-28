@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { rtcConfig } from '$lib/config/local';
+	// import { PeerConnection } from '$lib/peerPool';
 	import {
 		Signaler,
 		type newAnswerEvent,
@@ -10,33 +12,55 @@
 
 	const circleId = page.params.slug;
 
-	const rtcConfig = {
-			iceServers: [
-				{
-					urls: 'stun:stun.relay.metered.ca:80'
-				},
-				{
-					urls: 'turn:global.relay.metered.ca:80',
-					username: 'acb86e68047bd92f124b44a6',
-					credential: 'mGSHP5Xs9RfJ01aQ'
-				},
-				{
-					urls: 'turn:global.relay.metered.ca:80?transport=tcp',
-					username: 'acb86e68047bd92f124b44a6',
-					credential: 'mGSHP5Xs9RfJ01aQ'
-				},
-				{
-					urls: 'turn:global.relay.metered.ca:443',
-					username: 'acb86e68047bd92f124b44a6',
-					credential: 'mGSHP5Xs9RfJ01aQ'
-				},
-				{
-					urls: 'turns:global.relay.metered.ca:443?transport=tcp',
-					username: 'acb86e68047bd92f124b44a6',
-					credential: 'mGSHP5Xs9RfJ01aQ'
-				}
-			]
-		};
+	/* 
+		I have a svelte component 
+		peers = []
+		
+		I want it to be open to connections to other peers
+		It will have one object called a peer pool 
+
+		I want to abstract away all of the RTC offer/answer mechanisms
+
+		peerPool.on("new_peer_connection", (event) => {
+			// gives you acccess to a peer
+			// add connection to peer list 
+		})	
+
+		peerPool.on("member_disconnected", (event) => {
+			// remove connection from peer list 
+		})
+
+		POV p1
+		member comes up 
+		create RTCConnection
+		send offer 
+	
+		POV p2
+		receive offer
+		create RTC connection
+		send answer 
+
+		POV p1
+		receive answer
+		trigger ICE protocol exchanges 
+
+		Connection established
+		Send messages
+
+		One idea 
+		- PeerConnectionFactory
+		- Upon signal that new member joined the room 
+		- Create a new connection abstraction
+		- Add event listeners for connection established and connection not established
+		- Add layer for sending and receiving a message 
+		- Then peer pool keeps a map of all of these connections
+		- with exposes following methods 
+		- 	getPeer()
+		- 	broadcast()
+
+
+		peerPool.on("")
+	*/ 
 
 	let connected: boolean = $state(false);
 	let connectedToPeer: boolean = $state(false);
@@ -48,13 +72,6 @@
 	let connection: RTCPeerConnection | undefined = $state();
 	let otherPeerId: string | undefined = $state();
 	let channel: RTCDataChannel | undefined = $state();
-
-	// next step
-	// move functionality to dedicated classes (signaler, peerConnection, peerConnectionPool)
-	// first move what you can to the signaler
-	// test that it works
-	// then start working on a peer pool class, that has it's own signaler instance
-	// strongly type everything. Also handle better the case where the peer connection could be undefined
 
 	const sendOfferToPeer = async (toPeerId: string): Promise<void> => {
 		if (!signaler || !connection) {
@@ -81,7 +98,6 @@
 		});
 
 		channel.addEventListener('error', (e) => {
-			debugger;
 			console.log('Error on data channel' + e);
 		});
 
@@ -120,6 +136,8 @@
 
 		otherPeerId = event.fromPeerId;
 		messages.push(`Got offer from peer with ID ${event.fromPeerId}`);
+		messages.push(`Offer: ${event.offer}`)
+		debugger;
 		connection!.setRemoteDescription(new RTCSessionDescription(event.offer));
 		const answer = await connection!.createAnswer();
 		await connection!.setLocalDescription(answer);
@@ -227,6 +245,7 @@
 		}
 
 		connected = false;
+		connectedToPeer = false;
 		peerId = 'n/a';
 
 		signaler.close();
