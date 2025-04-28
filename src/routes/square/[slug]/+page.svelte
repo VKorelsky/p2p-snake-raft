@@ -122,6 +122,16 @@
 			messages.push(`[${event.peerId}] - ${event.message}`);
 		});
 
+		connection.addEventListener('iceCandidateSent', (event: any) => {
+			console.log(event);
+			messages.push(`Sent ICE candidate to peer ${event.detail.peerId}`);
+		});
+
+		connection.addEventListener('iceCandidateReceived', (event: any) => {
+			console.log(event);
+			messages.push(`Received ICE candidate from peer ${event.detail.peerId}`); 
+		});
+
 		return connection;
 	};
 

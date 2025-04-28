@@ -4,6 +4,8 @@ import type { newAnswerEvent, newIceCandidateEvent, Signaler } from './signaler'
 // events defined
 // "connectionEstablished"
 // "connectionFailed"
+// "iceCandidateSent"
+// "iceCandidateReceived"
 // "newMessage"
 // "disconnected"
 
@@ -150,6 +152,15 @@ export class PeerConnection extends EventTarget {
 		this.connection.addEventListener('icecandidate', (event) => {
 			if (event.candidate) {
 				this.signaler.sendIceCandidate(this.peerId, event.candidate);
+
+				// Dispatch iceCandidateSent event
+				const iceCandidateSentEvent = new CustomEvent('iceCandidateSent', {
+					detail: {
+						peerId: this.peerId,
+						candidate: event.candidate
+					}
+				});
+				this.dispatchEvent(iceCandidateSentEvent);
 			}
 		});
 	}
@@ -167,6 +178,15 @@ export class PeerConnection extends EventTarget {
 		return (event: newIceCandidateEvent) => {
 			if (event.fromPeerId === this.peerId) {
 				this.connection.addIceCandidate(event.newIceCandidate);
+
+				// Dispatch iceCandidateReceived event
+				const iceCandidateReceivedEvent = new CustomEvent('iceCandidateReceived', {
+					detail: {
+						peerId: this.peerId,
+						candidate: event.newIceCandidate
+					}
+				});
+				this.dispatchEvent(iceCandidateReceivedEvent);
 			}
 		};
 	}
