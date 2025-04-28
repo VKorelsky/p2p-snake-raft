@@ -6,7 +6,7 @@ import type { newOfferEvent, Signaler } from './signaler';
 // peerDisconnectedEvent
 // newMessage
 
-class PeerPool extends EventTarget {
+export class PeerPool extends EventTarget {
 	private ownPeerId: string;
 	private signaler: Signaler;
 	private peers: { [peerId: string]: PeerConnection };
@@ -59,7 +59,7 @@ class PeerPool extends EventTarget {
 			const connection = event.target as PeerConnection;
 			this.peers[event.detail.peerId] = connection;
 
-			const newPeerConnectedEvent = new CustomEvent('newPeerConnected', {
+			const newPeerConnectedEvent = new CustomEvent('peerConnected', {
 				detail: { peerId: event.detail.peerId }
 			});
 
@@ -74,7 +74,7 @@ class PeerPool extends EventTarget {
 			console.log(`Disconnected from peer ${event.detail.peerId}`);
 			delete this.peers[event.detail.peerId];
 
-			const peerDisconnectedEvent = new CustomEvent('peerDisconnectedEvent', {
+			const peerDisconnectedEvent = new CustomEvent('peerDisconnected', {
 				detail: { peerId: event.detail.peerId }
 			});
 

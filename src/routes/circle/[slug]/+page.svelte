@@ -1,80 +1,96 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { PeerConnection } from '$lib/peerConnection';
-	import { Signaler, type newOfferEvent } from '$lib/signaler';
+	import { PeerPool } from '$lib/peerPool';
+	import { Signaler } from '$lib/signaler';
 	import { onDestroy, onMount } from 'svelte';
 
 	const circleId = page.params.slug;
 
+	class Message {
+		peer: string;
+		content: string;
+
+		constructor(peer: string, content: string) {
+			this.peer = peer;
+			this.content = content;
+		}
+
+		toString(): string {
+			return `[${this.peer}] ${this.content}`;
+		}
+	}
+
 	let connected: boolean = $state(false);
-	let connectedToPeer: boolean = $state(false);
 	let signaler: Signaler | undefined = $state();
-	let messages: string[] = $state([]);
-	let peerId: string = $state('');
+	let ownPeerId: string = $state('');
 
-	// rtc connection stuff
-	let connection: PeerConnection | undefined = $state();
+	let connectedPeers: Set<string> = $state(new Set());
+	let messages: Message[] = $state([]);
 
-	const handleOfferFromPeer = async (event: newOfferEvent): Promise<void> => {
-		messages.push(`New offer from peer with id ${event.fromPeerId}. Responding...`);
+	let peerPool: PeerPool | undefined = $state();
 
-		if (connection) {
-			connection.close();
-		}
-
-		connection = createNewConnection(event.fromPeerId);
-
-		const offer = new RTCSessionDescription(event.offer);
-		connection.initiateFrom(offer);
-	};
-
-	const onNewRoomMember = (newPeerId: string) => {
-		messages.push(`New room member. Initiating connection with ${newPeerId}`);
-
-		if (connection) {
-			// there is an existing connection, shut it down then reconnect to the other peer
-			connection.close();
-		}
-
-		connection = createNewConnection(newPeerId);
-		connection.initiate();
-	};
 	const connectToSignaler = () => {
-		messages.push('connecting the signaler...');
+		messages.push(new Message('system', 'connecting the signaler...'));
 		signaler = new Signaler(circleId);
 
 		signaler.onConnect((sessionIdentifier) => {
-			messages.push('connected to the signaler...');
+			messages.push(new Message('system', 'connected to the signaler...'));
 			connected = true;
-			peerId = sessionIdentifier;
+			ownPeerId = sessionIdentifier;
+			// TODO probably a better pattern for doing this rather than relying on component level state
+			// will allow avoiding having to explicitly tell TS that the signaler won't be null at peer pool initialization
+			initPeerPool();
 		});
 
 		signaler.onConnectError((err) => {
-			messages.push(`Error while attempting connection ${err}`);
+			messages.push(new Message('system', `Error while attempting connection ${err}`));
 		});
 
 		signaler.onDisconnect((reason) => {
-			messages.push(`Disconnected from socket. Reason provided is ${reason}`);
+			messages.push(
+				new Message('system', `Disconnected from socket. Reason provided is ${reason}`)
+			);
 			connected = false;
 		});
+	};
 
+	const initPeerPool = () => {
+		peerPool = new PeerPool(ownPeerId, signaler!);
+
+		peerPool.addEventListener('peerConnected', (event: any) => {
+			console.log('Peer connected event received:', event.detail);
+			messages.push(new Message('system', `Peer ${event.detail.peerId} connected`));
+			connectedPeers.add(event.detail.peerId);
+		});
+
+		peerPool.addEventListener('peerDisconnected', (event: any) => {
+			console.log('Peer disconnected event received:', event.detail); 
+			messages.push(new Message('system', `Peer ${event.detail.peerId} disconnected`));
+			connectedPeers.delete(event.detail.peerId);
+		});
+
+		peerPool.addEventListener('newMessage', (event: any) => {
+			console.log('New message event received:', event.detail);
+			messages.push(new Message(event.detail.peerId, event.detail.message));
+		});
 	};
 
 	const disconnect = () => {
-		messages.push('disconnecting from the signaler...');
+		messages.push(new Message('system', 'disconnecting from the signaler...'));
 
 		if (!signaler) {
-			messages.push('Not connected, nothing to disconnect from');
+			messages.push(new Message('system', 'Not connected, nothing to disconnect from'));
 			return;
 		}
 
 		connected = false;
-		connectedToPeer = false;
+		// TODO could this be set from the peerPool directly? hmm
+		connectedPeers = new Set();
 
 		signaler.close();
 
-		if (connection) {
-			connection.close();
+		if (peerPool) {
+			peerPool.close();
 		}
 	};
 
@@ -93,10 +109,10 @@
 		const data = new FormData(form);
 		const message = data.get('message') as string;
 
-		if (connection && message) {
-			messages.push(`[You] - ${message}`);
+		if (peerPool && message) {
+			messages.push(new Message('You', message));
 			console.log('sending new message' + message);
-			connection.sendMessage(message);
+			peerPool.broadcast(message);
 		}
 	};
 </script>
@@ -104,9 +120,9 @@
 <div class="flex flex-col items-center pt-8">
 	<h1 class="text-center font-mono text-2xl font-bold text-blue-600">Circle <br /> {circleId}</h1>
 	<div class="my-7">
-		<p class="text-shadow-blue-50"><b>You are</b>: {peerId}</p>
+		<p class="text-shadow-blue-50"><b>You are</b>: {ownPeerId}</p>
 		<p class="text-shadow-blue-50"><b>Connected to room?</b> {connected}</p>
-		<p class="text-shadow-blue-50"><b>Connected to peer?</b> {connectedToPeer}</p>
+		<p class="text-shadow-blue-50"><b>Peers:</b> [{Array.from(connectedPeers)}]</p>
 	</div>
 	<div class="flex flex-row">
 		<button
