@@ -3,6 +3,7 @@
 	import { PeerPool } from '$lib/peerPool';
 	import { Signaler } from '$lib/signaler';
 	import { onDestroy, onMount } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 
 	const circleId = page.params.slug;
 
@@ -24,7 +25,7 @@
 	let signaler: Signaler | undefined = $state();
 	let ownPeerId: string = $state('');
 
-	let connectedPeers: Set<string> = $state(new Set());
+	let connectedPeers: Set<string> = new SvelteSet();
 	let messages: Message[] = $state([]);
 
 	let peerPool: PeerPool | undefined = $state();
@@ -122,7 +123,7 @@
 	<div class="my-7">
 		<p class="text-shadow-blue-50"><b>You are</b>: {ownPeerId}</p>
 		<p class="text-shadow-blue-50"><b>Connected to room?</b> {connected}</p>
-		<p class="text-shadow-blue-50"><b>Peers:</b> [{Array.from(connectedPeers)}]</p>
+		<p class="text-shadow-blue-50"><b>Peers ({connectedPeers.size}): [{Array.from(connectedPeers)}]</b></p>
 	</div>
 	<div class="flex flex-row">
 		<button
