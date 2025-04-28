@@ -180,10 +180,10 @@
 			connected = false;
 		});
 
-		signaler.onNewRoomMember(onNewPeer);
-		signaler.onNewAnswer(handleAnswerFromPeer);
-		signaler.onNewOffer(handleOfferFromPeer);
-		signaler.onNewIceCandidate(handleNewIceCandidate);
+		signaler.onNewRoomMember(onNewPeer); // peer pool, creates PeerConnection
+		signaler.onNewAnswer(handleAnswerFromPeer); // handled by peerPool, sent to the right peer connection
+		signaler.onNewOffer(handleOfferFromPeer); // peer pool, creates a PeerConnection
+		signaler.onNewIceCandidate(handleNewIceCandidate); // handled by the peer connection
 	};
 
 	const newWebRtcConnection = () => {

@@ -1,5 +1,8 @@
 import { io, Socket } from 'socket.io-client';
 
+export type SignalerEvent = newOfferEvent | newAnswerEvent | newIceCandidateEvent;
+export type SignalerEventListener = (event: SignalerEvent) => Promise<void>;
+
 export interface newOfferEvent {
 	fromPeerId: string;
 	offer: any;
