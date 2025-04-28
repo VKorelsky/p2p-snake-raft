@@ -11,6 +11,7 @@
 	let signaler: Signaler | undefined = $state();
 	let messages: string[] = $state([]);
 	let peerId: string = $state('');
+	
 
 	// rtc connection stuff
 	let connection: PeerConnection | undefined = $state();
