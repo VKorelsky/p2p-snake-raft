@@ -1,199 +1,109 @@
-import { rtcConfig } from './config/local';
-import type { newAnswerEvent, newIceCandidateEvent, Signaler } from './signaler';
+import { PeerConnection } from './peerConnection';
+import type { newOfferEvent, Signaler } from './signaler';
 
-// events defined
-// "connectionEstablished"
-// "connectionFailed"
-// "iceCandidateSent"
-// "iceCandidateReceived"
-// "newMessage"
-// "disconnected"
+// ======== events ========  
+// newPeerConnected
+// peerDisconnectedEvent
+// newMessage
 
-export class PeerConnection extends EventTarget {
-	private selfId: string;
-	private peerId: string;
-	private connection: RTCPeerConnection;
-	private dataChannel: RTCDataChannel | undefined;
+class PeerPool extends EventTarget {
+	private ownPeerId: string;
 	private signaler: Signaler;
+	private peers: { [peerId: string]: PeerConnection };
 
-	public constructor(selfId: string, peerId: string, signaler: Signaler) {
+	public constructor(ownPeerId: string, signaler: Signaler) {
 		super();
-		this.selfId = selfId;
-		this.peerId = peerId;
+		this.ownPeerId = ownPeerId;
 		this.signaler = signaler;
-		this.connection = new RTCPeerConnection(rtcConfig);
+		this.peers = {};
 
-		this.setupConnection();
+		this.signaler.onNewRoomMember(this.getNewRoomMemberHandler());
+		this.signaler.onNewOffer(this.getNewOfferHandler());
 	}
 
-	public getOtherPeerId() {
-		return this.peerId;
+	public getConnectedPeerCount(): number {
+		return Object.keys(this.peers).length;
 	}
 
-	public async respond(sessionDescription: RTCSessionDescription) {
-		this.connection.setRemoteDescription(sessionDescription);
-		const answer = await this.connection.createAnswer();
-		await this.connection.setLocalDescription(answer);
+	public broadcast(message: string) {
+		Object.values(this.peers).forEach((con) => con.isOpen() && con.sendMessage(message));
+	}
 
-		this.connection.addEventListener('datachannel', (event: RTCDataChannelEvent) => {
-			this.dataChannel = event.channel as RTCDataChannel;
-			this.dataChannel.addEventListener('message', (event: MessageEvent) => {
-				console.log('Received new message event on data channel' + event);
-				
-				const newMessageEvent = new CustomEvent('newMessage', {
-					detail: {
-						peerId: this.peerId,
-						message: event.data
-					}
-				});
+	public close() {
+		Object.values(this.peers).forEach(con => con.close());
+	}
 
-				this.dispatchEvent(newMessageEvent);
+	private getNewRoomMemberHandler() {
+		return async (newPeerId: string) => {
+			const connection = this.createNewConnection(newPeerId);
+			this.peers[newPeerId] = connection;
+			await connection.initiate();
+		};
+	}
+
+	private getNewOfferHandler() {
+		return async (event: newOfferEvent) => {
+			const offer = new RTCSessionDescription(event.offer);
+			const connection = this.createNewConnection(event.fromPeerId);
+			this.peers[event.fromPeerId] = connection;
+			await connection.initiateFrom(offer);
+		};
+	}
+
+	private createNewConnection(otherPeerId: string) {
+		const connection = new PeerConnection(this.ownPeerId, otherPeerId, this.signaler);
+
+		// TODO type the whole event listener thing etc
+		connection.addEventListener('connectionEstablished', (event: any) => {
+			console.log(`Connected to peer ${event.detail.peerId}`);
+			const connection = event.target as PeerConnection;
+			this.peers[event.detail.peerId] = connection;
+
+			const newPeerConnectedEvent = new CustomEvent('newPeerConnected', {
+				detail: { peerId: event.detail.peerId }
 			});
+
+			this.dispatchEvent(newPeerConnectedEvent);
 		});
 
-		this.signaler.onNewIceCandidate(this.getNewIceCandidateHandler());
-		this.signaler.sendAnswer(this.peerId, answer);
-	}
-
-	public async initiate() {
-		this.dataChannel = this.connection.createDataChannel(`${this.selfId} - ${this.peerId}`);
-
-		const offer = await this.connection.createOffer();
-		await this.connection.setLocalDescription(offer);
-
-		// TODO perhaps it's here that we should be setting the initiate connection to true
-		this.dataChannel.addEventListener('open', (event) => {
-			console.log('Channel open event:' + event);
-			console.log('Channel object:' + this.dataChannel);
+		connection.addEventListener('connectionFailed', (event: any) => {
+			console.log(`Connection failed with peer ${event.detail.peerId}`);
 		});
 
-		this.dataChannel.addEventListener('message', (event: MessageEvent) => {
-			console.log('Received new message event on data channel' + event);
+		connection.addEventListener('disconnected', (event: any) => {
+			console.log(`Disconnected from peer ${event.detail.peerId}`);
+			delete this.peers[event.detail.peerId];
+
+			const peerDisconnectedEvent = new CustomEvent('peerDisconnectedEvent', {
+				detail: { peerId: event.detail.peerId }
+			});
+
+			this.dispatchEvent(peerDisconnectedEvent);
+		});
+
+		connection.addEventListener('newMessage', (event: any) => {
+			console.log(`New message received from peer ${event.detail.peerId}`);
+
+			const data = event.detail;
 
 			const newMessageEvent = new CustomEvent('newMessage', {
 				detail: {
-					peerId: this.peerId,
-					message: event.data
+					peerId: data.peerId,
+					message: data.message
 				}
 			});
 
 			this.dispatchEvent(newMessageEvent);
 		});
 
-		this.dataChannel.addEventListener('error', (e) => {
-			console.log('Error on data channel' + e);
+		connection.addEventListener('iceCandidateSent', (event: any) => {
+			console.log(`ICE candidate sent to peer ${event.detail.peerId}`);
 		});
 
-		this.signaler.onNewAnswer(this.getNewAnswerHandler());
-		this.signaler.onNewIceCandidate(this.getNewIceCandidateHandler());
-
-		this.signaler.sendOffer(this.peerId, offer);
-	}
-
-	public close() {
-		if (this.dataChannel) {
-			this.dataChannel.close();
-		}
-
-		if (this.connection) {
-			this.connection.close();
-		}
-	}
-
-	public sendMessage(message: string) {
-		if (!(this.connection.connectionState === 'connected')) {
-			throw new Error('Connection is not open');
-		}
-
-		if (!this.dataChannel) {
-			throw new Error('No data channel open between the peers');
-		}
-
-		console.log('Sending message from ' + this);
-		this.dataChannel.send(message);
-	}
-
-	private setupConnection() {
-		this.connection.addEventListener('connectionstatechange', () => {
-			if (this.connection.connectionState === 'connected') {
-				const connectionEstablishedEvent = new CustomEvent('connectionEstablished', {
-					detail: {
-						peerId: this.peerId
-					}
-				});
-
-				this.dispatchEvent(connectionEstablishedEvent);
-			}
-
-			if (this.connection.connectionState === 'failed') {
-				const connectionFailedEvent = new CustomEvent('connectionFailed', {
-					detail: {
-						peerId: this.peerId
-					}
-				});
-
-				this.dispatchEvent(connectionFailedEvent);
-			}
-
-			if (this.connection.connectionState === 'closed') {
-				const disconnectedEvent = new CustomEvent('disconnected', {
-					detail: {
-						peerId: this.peerId
-					}
-				});
-
-				this.dispatchEvent(disconnectedEvent);
-			}
+		connection.addEventListener('iceCandidateReceived', (event: any) => {
+			console.log(`ICE candidate received from peer ${event.detail.peerId}`);
 		});
 
-		this.connection.addEventListener('icecandidateerror', (event) => {
-			console.log('ICE candidate error:', event);
-		});
-
-		this.connection.addEventListener('iceconnectionstatechange', (event) => {
-			console.log('ICE connection state change:', event);
-		});
-
-		this.connection.addEventListener('icecandidate', (event) => {
-			if (event.candidate) {
-				console.log("New local ice candidate...")
-				this.signaler.sendIceCandidate(this.peerId, event.candidate);
-
-				// Dispatch iceCandidateSent event
-				const iceCandidateSentEvent = new CustomEvent('iceCandidateSent', {
-					detail: {
-						peerId: this.peerId,
-						candidate: event.candidate
-					}
-				});
-				this.dispatchEvent(iceCandidateSentEvent);
-			}
-		});
-	}
-
-	private getNewAnswerHandler() {
-		return async (event: newAnswerEvent) => {
-			if (event.fromPeerId === this.peerId) {
-				const remotePeerDescription = new RTCSessionDescription(event.answer);
-				await this.connection.setRemoteDescription(remotePeerDescription);
-			}
-		};
-	}
-
-	private getNewIceCandidateHandler() {
-		return async (event: newIceCandidateEvent) => {
-			if (event.fromPeerId === this.peerId) {
-				await this.connection.addIceCandidate(event.newIceCandidate);
-
-				// Dispatch iceCandidateReceived event
-				const iceCandidateReceivedEvent = new CustomEvent('iceCandidateReceived', {
-					detail: {
-						peerId: this.peerId,
-						candidate: event.newIceCandidate
-					}
-				});
-				this.dispatchEvent(iceCandidateReceivedEvent);
-			}
-		};
+		return connection;
 	}
 }

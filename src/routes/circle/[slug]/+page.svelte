@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { PeerConnection } from '$lib/peerPool';
+	import { PeerConnection } from '$lib/peerConnection';
 	import { Signaler, type newOfferEvent } from '$lib/signaler';
 	import { onDestroy, onMount } from 'svelte';
 
@@ -11,7 +11,6 @@
 	let signaler: Signaler | undefined = $state();
 	let messages: string[] = $state([]);
 	let peerId: string = $state('');
-	
 
 	// rtc connection stuff
 	let connection: PeerConnection | undefined = $state();
@@ -26,7 +25,7 @@
 		connection = createNewConnection(event.fromPeerId);
 
 		const offer = new RTCSessionDescription(event.offer);
-		connection.respond(offer);
+		connection.initiateFrom(offer);
 	};
 
 	const onNewRoomMember = (newPeerId: string) => {
@@ -40,47 +39,6 @@
 		connection = createNewConnection(newPeerId);
 		connection.initiate();
 	};
-
-	const createNewConnection = (withPeerId: string) => {
-		connection = new PeerConnection(peerId, withPeerId, signaler!);
-
-		// TODO type the whole event listener thing etc
-		connection.addEventListener('connectionEstablished', (event: any) => {
-			console.log(event);
-			connectedToPeer = true;
-			messages.push('Connection to peer established');
-		});
-
-		connection.addEventListener('connectionFailed', (event: any) => {
-			console.log(event);
-			messages.push('Connection to peer failed');
-		});
-
-		connection.addEventListener('disconnected', (event: any) => {
-			console.log(event);
-			messages.push('Disconnected from peer');
-			connectedToPeer = false;
-		});
-
-		connection.addEventListener('newMessage', (event: any) => {
-			console.log(event);
-			const data = event.detail;
-			messages.push(`[${data.peerId}] - ${data.message}`);
-		});
-
-		connection.addEventListener('iceCandidateSent', (event: any) => {
-			console.log('ice candidate sent:' + event);
-			messages.push(`Sent ICE candidate to peer ${event.detail.peerId}`);
-		});
-
-		connection.addEventListener('iceCandidateReceived', (event: any) => {
-			console.log('ice candidate received:' + event);
-			messages.push(`Received ICE candidate from peer ${event.detail.peerId}`);
-		});
-
-		return connection;
-	};
-
 	const connectToSignaler = () => {
 		messages.push('connecting the signaler...');
 		signaler = new Signaler(circleId);
@@ -100,8 +58,6 @@
 			connected = false;
 		});
 
-		signaler.onNewRoomMember(onNewRoomMember); // peer pool, creates PeerConnection
-		signaler.onNewOffer(handleOfferFromPeer); // peer pool, creates a PeerConnection
 	};
 
 	const disconnect = () => {
