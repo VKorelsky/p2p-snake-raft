@@ -116,7 +116,8 @@
 
 		connection.addEventListener('newMessage', (event: any) => {
 			console.log(event);
-			messages.push(`[${event.peerId}] - ${event.message}`);
+            const data = event.detail;
+			messages.push(`[${data.peerId}] - ${data.message}`);
 		});
 
 		connection.addEventListener('iceCandidateSent', (event: any) => {

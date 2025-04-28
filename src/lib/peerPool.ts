@@ -39,7 +39,7 @@ export class PeerConnection extends EventTarget {
 			this.dataChannel = event.channel as RTCDataChannel;
 			this.dataChannel.addEventListener('message', (event: MessageEvent) => {
 				console.log('Received new message event on data channel' + event);
-
+				
 				const newMessageEvent = new CustomEvent('newMessage', {
 					detail: {
 						peerId: this.peerId,
