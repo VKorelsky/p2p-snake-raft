@@ -7,38 +7,80 @@
 
 	const circleId = page.params.slug;
 
-	class Message {
-		peer: string;
+	// ================== Message log ==================
+	// todo think about API and class design
+	let currentSequenceNumber: number = 0;
+
+	const getNextSequenceNumber = () => {
+		return (currentSequenceNumber += 1);
+	};
+
+	interface IMessage {
+		toString: () => string;
+	}
+
+	class Message implements IMessage {
+		// a message which is part of the shared log
+		// no to peer because all messages are broadcast to everyone
+		fromPeer: string;
+		content: string;
+		sequenceNumber: number;
+
+		constructor(fromPeer: string, content: string) {
+			this.fromPeer = fromPeer;
+			this.content = content;
+			this.sequenceNumber = getNextSequenceNumber();
+		}
+
+		toString(): string {
+			return `[${this.sequenceNumber}][${this.getPeerDisplayName()}] ${this.content}`;
+		}
+
+		private getPeerDisplayName() {
+			if (this.fromPeer === ownPeerId) {
+				return 'You';
+			} else {
+				return this.fromPeer;
+			}
+		}
+	}
+
+	class SystemMessage implements IMessage {
+		// a message which is not part of the shared log
 		content: string;
 
-		constructor(peer: string, content: string) {
-			this.peer = peer;
+		constructor(content: string) {
 			this.content = content;
 		}
 
 		toString(): string {
-			return `[${this.peer}] ${this.content}`;
+			return `[SYSTEM] ${this.content}`;
 		}
 	}
+	// ================== END LOG ==================
 
 	let connected: boolean = $state(false);
 	let signaler: Signaler | undefined = $state();
 	let ownPeerId: string = $state('');
 
+	// right now
+	// make each message have a sequence number
+	// then try and make it so that different parties end up with different chat histories
+
 	// TODO this might be a svelte compiler bug?
 	// complaining that I am accessing the variable but not declaring it in $state
 	// svelte-ignore non_reactive_update
 	let connectedPeers: Set<string> = new SvelteSet();
-	let messages: Message[] = $state([]);
+	let messages: IMessage[] = $state([]);
 
 	let peerPool: PeerPool | undefined = $state();
 
 	const connectToSignaler = () => {
-		messages.push(new Message('system', 'connecting the signaler...'));
+		messages.push(new SystemMessage('connecting the signaler...'));
 		signaler = new Signaler(circleId);
 
 		signaler.onConnect((sessionIdentifier) => {
-			messages.push(new Message('system', 'connected to the signaler...'));
+			messages.push(new SystemMessage('connected to the signaler...'));
 			connected = true;
 			ownPeerId = sessionIdentifier;
 			// TODO probably a better pattern for doing this rather than relying on component level state
@@ -47,13 +89,11 @@
 		});
 
 		signaler.onConnectError((err) => {
-			messages.push(new Message('system', `Error while attempting connection ${err}`));
+			messages.push(new SystemMessage(`Error while attempting connection ${err}`));
 		});
 
 		signaler.onDisconnect((reason) => {
-			messages.push(
-				new Message('system', `Disconnected from socket. Reason provided is ${reason}`)
-			);
+			messages.push(new SystemMessage(`Disconnected from socket. Reason provided is ${reason}`));
 			connected = false;
 		});
 	};
@@ -63,13 +103,13 @@
 
 		peerPool.addEventListener('peerConnected', (event: any) => {
 			console.log('Peer connected event received:', event.detail);
-			messages.push(new Message('system', `Peer ${event.detail.peerId} connected`));
+			messages.push(new SystemMessage(`Peer ${event.detail.peerId} connected`));
 			connectedPeers.add(event.detail.peerId);
 		});
 
 		peerPool.addEventListener('peerDisconnected', (event: any) => {
-			console.log('Peer disconnected event received:', event.detail); 
-			messages.push(new Message('system', `Peer ${event.detail.peerId} disconnected`));
+			console.log('Peer disconnected event received:', event.detail);
+			messages.push(new SystemMessage(`Peer ${event.detail.peerId} disconnected`));
 			connectedPeers.delete(event.detail.peerId);
 		});
 
@@ -80,10 +120,10 @@
 	};
 
 	const disconnect = () => {
-		messages.push(new Message('system', 'disconnecting from the signaler...'));
+		messages.push(new SystemMessage('disconnecting from the signaler...'));
 
 		if (!signaler) {
-			messages.push(new Message('system', 'Not connected, nothing to disconnect from'));
+			messages.push(new SystemMessage('Not connected, nothing to disconnect from'));
 			return;
 		}
 
@@ -114,7 +154,7 @@
 		const message = data.get('message') as string;
 
 		if (peerPool && message) {
-			messages.push(new Message('You', message));
+			messages.push(new Message(ownPeerId, message));
 			console.log('sending new message' + message);
 			peerPool.broadcast(message);
 		}
@@ -126,7 +166,9 @@
 	<div class="my-7">
 		<p class="text-shadow-blue-50"><b>You are</b>: {ownPeerId}</p>
 		<p class="text-shadow-blue-50"><b>Connected to room?</b> {connected}</p>
-		<p class="text-shadow-blue-50"><b>Peers ({connectedPeers.size}): [{Array.from(connectedPeers)}]</b></p>
+		<p class="text-shadow-blue-50">
+			<b>Peers ({connectedPeers.size}): [{Array.from(connectedPeers)}]</b>
+		</p>
 	</div>
 	<div class="flex flex-row">
 		<button
