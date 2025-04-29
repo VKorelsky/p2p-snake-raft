@@ -25,6 +25,9 @@
 	let signaler: Signaler | undefined = $state();
 	let ownPeerId: string = $state('');
 
+	// TODO this might be a svelte compiler bug?
+	// complaining that I am accessing the variable but not declaring it in $state
+	// svelte-ignore non_reactive_update
 	let connectedPeers: Set<string> = new SvelteSet();
 	let messages: Message[] = $state([]);
 

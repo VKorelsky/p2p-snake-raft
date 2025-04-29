@@ -33,10 +33,12 @@ export interface ServerToClientEvents {
 	newIceCandidate: (event: newIceCandidateEvent) => void;
 }
 
-export class Signaler implements EventTarget {
+// TODO -> actually implement this
+export class Signaler extends EventTarget {
 	private socket: Socket<ServerToClientEvents, ClientToServerEvents>;
 
 	public constructor(circleId: string) {
+		super();
 		this.socket = io(this.buildSocketUrl(circleId), {
 			reconnectionAttempts: 2,
 			// restrict to websockets as when the server restarts, socket io switches to long polling
@@ -84,7 +86,7 @@ export class Signaler implements EventTarget {
 
 	// ====== SERVER TO CLIENT HANDLERS ======
 	// Type challenge
-	// a generic on function that accepts the event name as the first parameter and it's corresponding payload 
+	// a generic on function that accepts the event name as the first parameter and it's corresponding payload
 	// as the second parameter
 	public onNewRoomMember(listener: (newPeerId: string) => void) {
 		// TODO change this to new circle member instead of new room member
