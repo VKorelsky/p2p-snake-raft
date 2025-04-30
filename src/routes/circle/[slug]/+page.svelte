@@ -163,9 +163,19 @@
 			clearInterval(autoMessageInterval);
 			autoMessageInterval = undefined;
 		} else {
-			autoMessageInterval = setInterval(() => {
+			const now = new Date();
+			const delay = (5 - (now.getSeconds() % 5)) * 1000 - now.getMilliseconds();
+
+			// TODO see how to to do it repeatadly
+			messages.push(
+				new SystemMessage(`Sending the next message at ${new Date(now.getTime() + delay)}`)
+			);
+
+			setTimeout(() => {
+				// autoMessageInterval = setInterval(() => {
 				sendMessage(generateRandomString());
-			}, 1000); // Send a message every second
+				// }, 1000);
+			}, delay);
 		}
 	};
 
@@ -177,7 +187,7 @@
 		const message = data.get('message') as string;
 
 		if (message) {
-			console.log("sending message");
+			console.log('sending message');
 			sendMessage(message);
 		}
 
