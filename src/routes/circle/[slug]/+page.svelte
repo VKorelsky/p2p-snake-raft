@@ -166,15 +166,14 @@
 			const now = new Date();
 			const delay = (5 - (now.getSeconds() % 5)) * 1000 - now.getMilliseconds();
 
-			// TODO see how to to do it repeatadly
 			messages.push(
 				new SystemMessage(`Sending the next message at ${new Date(now.getTime() + delay)}`)
 			);
 
 			setTimeout(() => {
-				// autoMessageInterval = setInterval(() => {
-				sendMessage(generateRandomString());
-				// }, 1000);
+				autoMessageInterval = setInterval(() => {
+					sendMessage(generateRandomString());
+				}, 5000);
 			}, delay);
 		}
 	};
