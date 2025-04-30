@@ -85,14 +85,17 @@
 		};
 
 		p5.keyPressed = () => {
-			let dir: Move | undefined;
-			if (p5.keyCode === p5.UP_ARROW) dir = 'UP';
-			else if (p5.keyCode === p5.DOWN_ARROW) dir = 'DOWN';
-			else if (p5.keyCode === p5.LEFT_ARROW) dir = 'LEFT';
-			else if (p5.keyCode === p5.RIGHT_ARROW) dir = 'RIGHT';
+			if (p5.keyIsPressed) {
+				let dir: Move | undefined;
+				if (p5.keyCode === p5.UP_ARROW) dir = 'UP';
+				else if (p5.keyCode === p5.DOWN_ARROW) dir = 'DOWN';
+				else if (p5.keyCode === p5.LEFT_ARROW) dir = 'LEFT';
+				else if (p5.keyCode === p5.RIGHT_ARROW) dir = 'RIGHT';
 
-			if (dir) {
-				onMove(dir);
+				if (dir) {
+					onMove(dir);
+					return false; // Prevent multiple events
+				}
 			}
 		};
 	};
