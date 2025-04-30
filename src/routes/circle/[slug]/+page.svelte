@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import type { IMessage } from '$lib/model/message';
+	import { Message, SystemMessage } from '$lib/model/message';
 	import { PeerPool } from '$lib/peerPool';
 	import { Signaler } from '$lib/signaler';
 	import { getRandomDirection } from '$lib/utils';
@@ -7,59 +9,6 @@
 	import { SvelteSet } from 'svelte/reactivity';
 
 	const circleId = page.params.slug;
-
-	// ================== Message log ==================
-	// todo think about API and class design
-	let currentSequenceNumber: number = 0;
-
-	const getNextSequenceNumber = () => {
-		return (currentSequenceNumber += 1);
-	};
-
-	interface IMessage {
-		toString: () => string;
-	}
-
-	class Message implements IMessage {
-		// a message which is part of the shared log
-		// no to peer because all messages are broadcast to everyone
-		fromPeer: string;
-		content: string;
-		sequenceNumber: number;
-
-		constructor(fromPeer: string, content: string) {
-			this.fromPeer = fromPeer;
-			this.content = content;
-			this.sequenceNumber = getNextSequenceNumber();
-		}
-
-		toString(): string {
-			// return `[${this.sequenceNumber}][${this.getPeerDisplayName()}] ${this.content}`;
-			return `[${this.sequenceNumber}]${this.content}`;
-		}
-
-		private getPeerDisplayName() {
-			if (this.fromPeer === ownPeerId) {
-				return 'You';
-			} else {
-				return this.fromPeer;
-			}
-		}
-	}
-
-	class SystemMessage implements IMessage {
-		// a message which is not part of the shared log
-		content: string;
-
-		constructor(content: string) {
-			this.content = content;
-		}
-
-		toString(): string {
-			return `[SYSTEM] ${this.content}`;
-		}
-	}
-	// ================== END LOG ==================
 
 	let connected: boolean = $state(false);
 	let signaler: Signaler | undefined = $state();
@@ -199,10 +148,8 @@
 <div class="flex flex-col items-center pt-8">
 	<h1 class="text-center font-mono text-2xl font-bold text-blue-600">Snake <br /></h1>
 	<div class="my-7">
-		<p class="text-shadow-blue-50"><b>You are</b>: {ownPeerId}</p>
-		<p class="text-shadow-blue-50"><b>Connected to room?</b> {connected}</p>
 		<p class="text-shadow-blue-50">
-			<b>Peers: {connectedPeers.size} </b>
+				<b>You are</b>: {ownPeerId ? ownPeerId : 'N/A'} <br><b>Peers:</b> {connectedPeers.size}
 		</p>
 	</div>
 	<div class="flex flex-col items-center space-y-4">
@@ -223,24 +170,10 @@
 				onclick={toggleAutoMessage}
 				disabled={!connected || !peerPool}
 			>
-				{autoMessageInterval ? 'Stop' : 'Start'} Auto-Message
-			</button>
-			<button
-				class="h-12 w-32 rounded bg-gray-500 px-4 py-2 font-bold text-white hover:bg-gray-700"
-				onclick={() => (messages = [])}
-			>
-				Clear
+				{autoMessageInterval ? 'Stop' : 'Start'} auto play
 			</button>
 		</div>
 	</div>
-	<form action="/" class="mt-8 flex flex-row items-center justify-center" onsubmit={onNewMessage}>
-		<input class="rounded-md border p-1" type="text" name="message" id="message" />
-		<input
-			class="col-span-2 mx-8 h-12 w-full rounded bg-blue-500 px-4 py-2 font-bold text-white hover:bg-blue-700"
-			type="submit"
-			value="send message"
-		/>
-	</form>
 	<div class="mt-8 min-w-1">
 		<ul>
 			{#each messages.slice().reverse() as message, i}
