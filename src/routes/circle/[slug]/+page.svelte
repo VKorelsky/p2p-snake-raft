@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { PeerPool } from '$lib/peerPool';
 	import { Signaler } from '$lib/signaler';
-	import { generateRandomString } from '$lib/utils';
+	import { getRandomDirection } from '$lib/utils';
 	import { onDestroy, onMount } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 
@@ -34,8 +34,8 @@
 		}
 
 		toString(): string {
-			return `[${this.sequenceNumber}][${this.getPeerDisplayName()}] ${this.content}`;
-			// return `[${this.sequenceNumber}]${this.content}`;
+			// return `[${this.sequenceNumber}][${this.getPeerDisplayName()}] ${this.content}`;
+			return `[${this.sequenceNumber}]${this.content}`;
 		}
 
 		private getPeerDisplayName() {
@@ -164,16 +164,18 @@
 			autoMessageInterval = undefined;
 		} else {
 			const now = new Date();
-			const delay = (5 - (now.getSeconds() % 5)) * 1000 - now.getMilliseconds();
+			const delay = (10 - (now.getSeconds() % 10)) * 1000 - now.getMilliseconds();
 
 			messages.push(
-				new SystemMessage(`Sending the next message at ${new Date(now.getTime() + delay)}`)
+				new SystemMessage(
+					`Scheduling the first message to be sent at ${new Date(now.getTime() + delay)}`
+				)
 			);
 
 			setTimeout(() => {
 				autoMessageInterval = setInterval(() => {
-					sendMessage(generateRandomString());
-				}, 5000);
+					sendMessage(getRandomDirection());
+				}, 10000);
 			}, delay);
 		}
 	};
@@ -195,12 +197,12 @@
 </script>
 
 <div class="flex flex-col items-center pt-8">
-	<h1 class="text-center font-mono text-2xl font-bold text-blue-600">Room <br /> {circleId}</h1>
+	<h1 class="text-center font-mono text-2xl font-bold text-blue-600">Snake <br /></h1>
 	<div class="my-7">
 		<p class="text-shadow-blue-50"><b>You are</b>: {ownPeerId}</p>
 		<p class="text-shadow-blue-50"><b>Connected to room?</b> {connected}</p>
 		<p class="text-shadow-blue-50">
-			<b>Peers ({connectedPeers.size}): [{Array.from(connectedPeers)}]</b>
+			<b>Peers: {connectedPeers.size} </b>
 		</p>
 	</div>
 	<div class="flex flex-col items-center space-y-4">
