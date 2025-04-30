@@ -2,6 +2,7 @@
 	import { page } from '$app/state';
 	import { PeerPool } from '$lib/peerPool';
 	import { Signaler } from '$lib/signaler';
+	import { generateRandomString } from '$lib/utils';
 	import { onDestroy, onMount } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 
@@ -33,7 +34,8 @@
 		}
 
 		toString(): string {
-			return `[${this.sequenceNumber}][${this.getPeerDisplayName()}] ${this.content}`;
+			// return `[${this.sequenceNumber}][${this.getPeerDisplayName()}] ${this.content}`;
+			return `[${this.sequenceNumber}]${this.content}`;
 		}
 
 		private getPeerDisplayName() {
@@ -63,10 +65,6 @@
 	let signaler: Signaler | undefined = $state();
 	let ownPeerId: string = $state('');
 
-	// right now
-	// make each message have a sequence number
-	// then try and make it so that different parties end up with different chat histories
-
 	// TODO this might be a svelte compiler bug?
 	// complaining that I am accessing the variable but not declaring it in $state
 	// svelte-ignore non_reactive_update
@@ -74,6 +72,8 @@
 	let messages: IMessage[] = $state([]);
 
 	let peerPool: PeerPool | undefined = $state();
+
+	let autoMessageInterval: number | undefined = $state();
 
 	const connectToSignaler = () => {
 		messages.push(new SystemMessage('connecting the signaler...'));
@@ -115,7 +115,7 @@
 
 		peerPool.addEventListener('newMessage', (event: any) => {
 			console.log('New message event received:', event.detail);
-			messages.push(new Message(event.detail.peerId, event.detail.message));
+			processIncomingMessage(event.detail.peerId, event.detail.message);
 		});
 	};
 
@@ -129,7 +129,7 @@
 
 		connected = false;
 		// TODO could this be set from the peerPool directly? hmm
-		connectedPeers = new Set();
+		connectedPeers.clear();
 
 		signaler.close();
 
@@ -146,6 +146,29 @@
 		disconnect();
 	});
 
+	const processIncomingMessage = (fromPeerId: string, message: string) => {
+		messages.push(new Message(fromPeerId, message));
+	};
+
+	const sendMessage = (message: string) => {
+		if (peerPool) {
+			messages.push(new Message(ownPeerId, message));
+			console.log('sending new message' + message);
+			peerPool.broadcast(message);
+		}
+	};
+
+	const toggleAutoMessage = () => {
+		if (autoMessageInterval) {
+			clearInterval(autoMessageInterval);
+			autoMessageInterval = undefined;
+		} else {
+			autoMessageInterval = setInterval(() => {
+				sendMessage(generateRandomString());
+			}, 1000); // Send a message every second
+		}
+	};
+
 	const onNewMessage = (e: SubmitEvent) => {
 		// prevent form submission
 		e.preventDefault();
@@ -153,16 +176,16 @@
 		const data = new FormData(form);
 		const message = data.get('message') as string;
 
-		if (peerPool && message) {
-			messages.push(new Message(ownPeerId, message));
-			console.log('sending new message' + message);
-			peerPool.broadcast(message);
+		if (message) {
+			sendMessage(message);
 		}
+
+		form.reset();
 	};
 </script>
 
 <div class="flex flex-col items-center pt-8">
-	<h1 class="text-center font-mono text-2xl font-bold text-blue-600">Circle <br /> {circleId}</h1>
+	<h1 class="text-center font-mono text-2xl font-bold text-blue-600">Room <br /> {circleId}</h1>
 	<div class="my-7">
 		<p class="text-shadow-blue-50"><b>You are</b>: {ownPeerId}</p>
 		<p class="text-shadow-blue-50"><b>Connected to room?</b> {connected}</p>
@@ -170,19 +193,33 @@
 			<b>Peers ({connectedPeers.size}): [{Array.from(connectedPeers)}]</b>
 		</p>
 	</div>
-	<div class="flex flex-row">
-		<button
-			class="col-span-2 mx-8 h-12 w-full rounded bg-blue-500 px-4 py-2 font-bold text-white hover:bg-blue-700"
-			onclick={connectToSignaler}>connect</button
-		>
-		<button
-			class="col-span-2 mx-8 h-12 w-full rounded bg-blue-500 px-4 py-2 font-bold text-white hover:bg-blue-700"
-			onclick={disconnect}>disconnect</button
-		>
-		<button
-			class="col-span-2 mx-8 h-12 w-full rounded bg-blue-500 px-4 py-2 font-bold text-white hover:bg-blue-700"
-			onclick={() => (messages = [])}>clear</button
-		>
+	<div class="flex flex-col items-center space-y-4">
+		<div class="flex flex-row space-x-4">
+			<button
+				class="h-12 w-32 rounded bg-blue-500 px-4 py-2 font-bold text-white hover:bg-blue-700"
+				onclick={connected ? disconnect : connectToSignaler}
+			>
+				{connected ? 'Disconnect' : 'Connect'}
+			</button>
+			<button
+				class="h-12 w-48 rounded px-4 py-2 font-bold text-white
+					{!connected || !peerPool
+					? 'cursor-not-allowed bg-gray-400'
+					: autoMessageInterval
+						? 'bg-red-500 hover:bg-red-700'
+						: 'bg-green-500 hover:bg-green-700'}"
+				onclick={toggleAutoMessage}
+				disabled={!connected || !peerPool}
+			>
+				{autoMessageInterval ? 'Stop' : 'Start'} Auto-Message
+			</button>
+			<button
+				class="h-12 w-32 rounded bg-gray-500 px-4 py-2 font-bold text-white hover:bg-gray-700"
+				onclick={() => (messages = [])}
+			>
+				Clear
+			</button>
+		</div>
 	</div>
 	<form action="/" class="mt-8 flex flex-row items-center justify-center" onsubmit={onNewMessage}>
 		<input class="rounded-md border p-1" type="text" name="message" id="message" />
@@ -195,7 +232,7 @@
 	<div class="mt-8 min-w-1">
 		<ul>
 			{#each messages.slice().reverse() as message, i}
-				<li class="m-2 min-w-120 font-mono text-xs">{messages.length - i}| {message}</li>
+				<li class="m-2 min-w-120 font-mono text-xs">{message}</li>
 				<hr class="solid" />
 			{/each}
 		</ul>
