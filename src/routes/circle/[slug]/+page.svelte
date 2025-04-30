@@ -20,7 +20,7 @@
 	// svelte-ignore non_reactive_update
 	let connectedPeers: Set<string> = new SvelteSet();
 	let messages: IMessage[] = $state([]);
-	let drawerOpen: boolean = $state(true);
+	let drawerOpen: boolean = $state(false);
 
 	let peerPool: PeerPool | undefined = $state();
 
