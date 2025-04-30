@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import type { Move } from '$lib/model/game';
 	import type { IMessage } from '$lib/model/message';
 	import { Message, SystemMessage } from '$lib/model/message';
 	import { PeerPool } from '$lib/peerPool';
@@ -7,7 +8,8 @@
 	import { getRandomDirection } from '$lib/utils';
 	import { onDestroy, onMount } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
-	import { draw } from 'svelte/transition';
+	import Snake from '../../../components/Snake.svelte';
+	import type { MOVE } from 'p5';
 
 	const circleId = page.params.slug;
 
@@ -20,6 +22,7 @@
 	// svelte-ignore non_reactive_update
 	let connectedPeers: Set<string> = new SvelteSet();
 	let messages: IMessage[] = $state([]);
+	let moves: Move[] = $state(['UP', 'UP', 'RIGHT', 'RIGHT']);
 	let drawerOpen: boolean = $state(false);
 
 	let peerPool: PeerPool | undefined = $state();
@@ -145,16 +148,21 @@
 
 		form.reset();
 	};
+
+	const handleMove = (move: Move) => {
+		moves.push(move);
+		messages.push(new SystemMessage(`NEW MOVE ${move}`));
+	};
 </script>
 
 <div class="relative flex flex-col items-center pt-8">
 	<h1 class="text-center font-mono text-2xl font-bold text-blue-600">Snake <br /></h1>
 	<!-- LOG DRAWER -->
 	<div
-		class="fixed z-2 top-0 right-0 h-full w-1/3 shadow-lg transition-transform duration-300 px-6 py-3 bg-white"
+		class="fixed top-0 right-0 z-2 h-full w-1/3 bg-white px-6 py-3 shadow-lg transition-transform duration-300"
 		style="transform: translateX({drawerOpen ? '0' : '100%'})"
 	>
-		<div class="flex items-center justify-between mb-4">
+		<div class="mb-4 flex items-center justify-between">
 			<h2 class="text-lg font-bold">Messages</h2>
 			<button
 				class="rounded-full bg-red-500 px-2 font-bold text-white hover:bg-red-700"
@@ -178,11 +186,13 @@
 			</div>
 		{/if}
 	</div>
+	<!-- SHADOW BEHIND THE LOG DRAWER -->
 	<div
-		class="fixed z-1 inset-0 bg-gray-300 opacity-50 transition-opacity duration-300"
+		class="fixed inset-0 z-1 bg-gray-300 opacity-50 transition-opacity duration-300"
 		style="opacity: {drawerOpen ? '0.5' : '0'}; pointer-events: {drawerOpen ? 'auto' : 'none'}"
 	></div>
 
+	<!-- ROOM INFO -->
 	<div class="my-7">
 		<p class="text-shadow-blue-50">
 			<b>You are</b>: {ownPeerId ? ownPeerId : 'N/A'} <br /><b>Peers:</b>
@@ -190,6 +200,7 @@
 		</p>
 	</div>
 
+	<!-- ACTIONS -->
 	<div class="flex flex-col items-center space-y-4">
 		<div class="flex flex-row space-x-4">
 			<button
@@ -217,5 +228,10 @@
 				See command log
 			</button>
 		</div>
+	</div>
+
+	<!-- SNAKE -->
+	<div class="m-20">
+		<Snake actions={moves} onMove={handleMove} />
 	</div>
 </div>

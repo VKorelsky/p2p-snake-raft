@@ -25,6 +25,7 @@
 		"eslint-plugin-svelte": "^3.0.0",
 		"globals": "^16.0.0",
 		"jsdom": "^26.0.0",
+		"p5": "^2.0.1",
 		"prettier": "^3.4.2",
 		"prettier-plugin-svelte": "^3.3.3",
 		"prettier-plugin-tailwindcss": "^0.6.11",
@@ -36,6 +37,7 @@
 		"vite": "^6.2.5"
 	},
 	"dependencies": {
+		"p5-svelte": "^3.1.2",
 		"socket.io-client": "^4.8.1"
 	}
 }
