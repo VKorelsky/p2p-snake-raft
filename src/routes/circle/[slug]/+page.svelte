@@ -34,8 +34,8 @@
 		}
 
 		toString(): string {
-			// return `[${this.sequenceNumber}][${this.getPeerDisplayName()}] ${this.content}`;
-			return `[${this.sequenceNumber}]${this.content}`;
+			return `[${this.sequenceNumber}][${this.getPeerDisplayName()}] ${this.content}`;
+			// return `[${this.sequenceNumber}]${this.content}`;
 		}
 
 		private getPeerDisplayName() {
@@ -177,6 +177,7 @@
 		const message = data.get('message') as string;
 
 		if (message) {
+			console.log("sending message");
 			sendMessage(message);
 		}
 
