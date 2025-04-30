@@ -149,19 +149,18 @@
 
 <div class="relative flex flex-col items-center pt-8">
 	<h1 class="text-center font-mono text-2xl font-bold text-blue-600">Snake <br /></h1>
-
 	<!-- LOG DRAWER -->
 	<div
-		class="fixed z-2 top-0 right-0 h-full w-1/3 transform shadow-lg transition-transform duration-300 px-6 py-3 bg-white"
+		class="fixed z-2 top-0 right-0 h-full w-1/3 shadow-lg transition-transform duration-300 px-6 py-3 bg-white"
 		style="transform: translateX({drawerOpen ? '0' : '100%'})"
 	>
 		<div class="flex items-center justify-between mb-4">
 			<h2 class="text-lg font-bold">Messages</h2>
 			<button
-				class="flex items-center justify-center rounded bg-red-500 px-2 font-bold text-white hover:bg-red-700"
+				class="rounded-full bg-red-500 px-2 font-bold text-white hover:bg-red-700"
 				onclick={() => (drawerOpen = false)}
 			>
-				x
+				X
 			</button>
 		</div>
 		{#if messages.length > 0}
@@ -180,7 +179,8 @@
 		{/if}
 	</div>
 	<div
-		class="fixed z-1 inset-0 bg-gray-300 opacity-50 transition-opacity duration-300 { drawerOpen ? "" : "hidden" }"
+		class="fixed z-1 inset-0 bg-gray-300 opacity-50 transition-opacity duration-300"
+		style="opacity: {drawerOpen ? '0.5' : '0'}; pointer-events: {drawerOpen ? 'auto' : 'none'}"
 	></div>
 
 	<div class="my-7">
