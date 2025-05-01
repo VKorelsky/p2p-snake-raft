@@ -38,6 +38,7 @@
 	},
 	"dependencies": {
 		"p5-svelte": "^3.1.2",
-		"socket.io-client": "^4.8.1"
+		"socket.io-client": "^4.8.1",
+		"zod": "^3.24.3"
 	}
 }

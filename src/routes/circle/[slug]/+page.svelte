@@ -1,13 +1,12 @@
 <script lang="ts">
-	import { page } from '$app/state';;
-	import { getRandomDirection, SystemMessage } from '$lib/utils';
+	import { page } from '$app/state';
 	import { PeerPool } from '$lib/rtc/peerPool';
+	import { Signaler } from '$lib/rtc/signaler';
+	import type { Move, Stringifiable } from '$lib/types';
+	import { getRandomDirection, SystemMessage } from '$lib/utils';
 	import { onDestroy, onMount } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import Snake from '../../../components/Snake.svelte';
-	import type { Signaler } from '$lib/rtc/signaler';
-	import type { Loggable, Move } from '$lib/types';
-	import { LogMessage } from '$lib/consensus/logMessage';
 
 	const circleId = page.params.slug;
 
@@ -15,11 +14,33 @@
 	let signaler: Signaler | undefined = $state();
 	let ownPeerId: string = $state('');
 
+	/*
+		const logObserver = new LogObserver()
+
+		// join connects to the signaler and initializes the peerPool
+		// it then waits until it hears from a leader or triggers an election
+		// [DO LATER] here it might also choose to request a snapshot from the leader so it can update it's state
+		
+		// once it has either become the leader or figured out who the leader is, it's ready to update it's view of the replicated log
+		// from the POV of the component that needs stateful log 
+
+		cluster.addEventListener("newLogEntry", (event) => {
+			// apply new entries 
+			snakeMoves.push(entry.move);
+		})
+
+		logObserver.observe()
+
+		const onMovePlayed = (move) => {
+			logObserver.share(move);
+		}
+	*/
+
 	// TODO this might be a svelte compiler bug?
 	// complaining that I am accessing the variable but not declaring it in $state
 	// svelte-ignore non_reactive_update
 	let connectedPeers: Set<string> = new SvelteSet();
-	let debugLog: Loggable[] = $state([]);
+	let debugLog: Stringifiable[] = $state([]);
 	let snakeMoves: Move[] = $state([]);
 	let drawerOpen: boolean = $state(false);
 
@@ -99,23 +120,23 @@
 		disconnect();
 	});
 
-	const processPeerMove = (fromPeerId: string, command: string) => {
+	const processPeerMove = (fromPeerId: string, move: string) => {
 		const isValidDirection = (command: string): command is Move => {
 			return ['UP', 'DOWN', 'LEFT', 'RIGHT'].includes(command);
 		};
 
-		if (!isValidDirection(command)) {
-			debugLog.push(new SystemMessage(`Invalid move received from ${fromPeerId}: ${command}`));
+		if (!isValidDirection(move)) {
+			debugLog.push(new SystemMessage(`Invalid move received from ${fromPeerId}: ${move}`));
 			return;
 		}
 
-		debugLog.push(new LogMessage(fromPeerId, "", command));
-		snakeMoves.push(command);
+		debugLog.push(`[${fromPeerId}] - ${move}`);
+		snakeMoves.push(move);
 	};
 
 	const broadcastMove = (move: Move) => {
 		if (peerPool) {
-			debugLog.push(new LogMessage(ownPeerId, "", move));
+			debugLog.push(`Broadcasting move ${move}`);
 			peerPool.broadcast(move);
 		}
 	};
@@ -229,11 +250,11 @@
 
 	<!-- AUTOPLAY INFO IF STARTED -->
 	{#if autoPlayStartTime}
-	<div class="flex flex-row items-center justify-center pt-5">
-		<p class="text-center font-mono text-sm text-gray-600">
-			Auto play starting at {autoPlayStartTime.toLocaleTimeString()}
-		</p>
-	</div>
+		<div class="flex flex-row items-center justify-center pt-5">
+			<p class="text-center font-mono text-sm text-gray-600">
+				Auto play starting at {autoPlayStartTime.toLocaleTimeString()}
+			</p>
+		</div>
 	{/if}
 
 	<!-- SNAKE -->

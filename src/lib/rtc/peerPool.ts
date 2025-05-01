@@ -30,6 +30,14 @@ export class PeerPool extends EventTarget {
 		Object.values(this.peers).forEach((con) => con.isOpen() && con.sendMessage(message));
 	}
 
+	public sendMessage(toPeerId: string, message: string) {
+		// find the peer and throw an exception if not found
+
+		// then check if the datachannel is open 
+
+		// then send a message
+	}
+
 	public close() {
 		Object.values(this.peers).forEach(con => con.close());
 	}
