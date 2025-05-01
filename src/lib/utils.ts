@@ -1,4 +1,5 @@
 import type { Move } from "./model/game";
+import type { Loggable } from "./types";
 
 export const getRandomNumber = (max: number) => {
 	return Math.floor(Math.random() * max);
@@ -12,3 +13,15 @@ export const getRandomDirection = (): Move => {
 	const directions: Move[] = ['UP', 'DOWN', 'LEFT', 'RIGHT'];
 	return directions[getRandomNumber(directions.length)];
 };
+
+export class SystemMessage implements Loggable {
+	content: string;
+
+	constructor(content: string) {
+		this.content = content;
+	}
+
+	toString(): string {
+		return `[SYSTEM] ${this.content}`;
+	}
+}

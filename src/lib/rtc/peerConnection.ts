@@ -1,6 +1,7 @@
-import { rtcConfig } from './config/local';
+import { rtcConfig } from '../config/local';
 import type { newAnswerEvent, newIceCandidateEvent, Signaler } from './signaler';
 
+// TODO TYPES
 // events defined
 // "connectionEstablished"
 // "connectionFailed"
@@ -114,7 +115,7 @@ export class PeerConnection extends EventTarget {
 		}
 
 		console.log('Sending message from ' + this);
-		this.dataChannel.send(message);
+		this.dataChannel.send(message.toString());
 	}
 
 	private setupConnection() {

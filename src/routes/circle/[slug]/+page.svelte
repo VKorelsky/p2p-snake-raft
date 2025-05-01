@@ -1,14 +1,13 @@
 <script lang="ts">
-	import { page } from '$app/state';
-	import type { Move } from '$lib/model/game';
-	import type { IMessage } from '$lib/model/message';
-	import { Message, SystemMessage } from '$lib/model/message';
-	import { PeerPool } from '$lib/peerPool';
-	import { Signaler } from '$lib/signaler';
-	import { getRandomDirection } from '$lib/utils';
+	import { page } from '$app/state';;
+	import { getRandomDirection, SystemMessage } from '$lib/utils';
+	import { PeerPool } from '$lib/rtc/peerPool';
 	import { onDestroy, onMount } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import Snake from '../../../components/Snake.svelte';
+	import type { Signaler } from '$lib/rtc/signaler';
+	import type { Loggable, Move } from '$lib/types';
+	import { LogMessage } from '$lib/consensus/logMessage';
 
 	const circleId = page.params.slug;
 
@@ -20,8 +19,8 @@
 	// complaining that I am accessing the variable but not declaring it in $state
 	// svelte-ignore non_reactive_update
 	let connectedPeers: Set<string> = new SvelteSet();
-	let messages: IMessage[] = $state([]);
-	let moves: Move[] = $state([]);
+	let debugLog: Loggable[] = $state([]);
+	let snakeMoves: Move[] = $state([]);
 	let drawerOpen: boolean = $state(false);
 
 	let peerPool: PeerPool | undefined = $state();
@@ -30,11 +29,11 @@
 	let autoPlayStartTime: Date | undefined = $state();
 
 	const connectToSignaler = () => {
-		messages.push(new SystemMessage('connecting the signaler...'));
+		debugLog.push(new SystemMessage('connecting the signaler...'));
 		signaler = new Signaler(circleId);
 
 		signaler.onConnect((sessionIdentifier) => {
-			messages.push(new SystemMessage('connected to the signaler...'));
+			debugLog.push(new SystemMessage('connected to the signaler...'));
 			connected = true;
 			ownPeerId = sessionIdentifier;
 			// TODO probably a better pattern for doing this rather than relying on component level state
@@ -43,11 +42,11 @@
 		});
 
 		signaler.onConnectError((err) => {
-			messages.push(new SystemMessage(`Error while attempting connection ${err}`));
+			debugLog.push(new SystemMessage(`Error while attempting connection ${err}`));
 		});
 
 		signaler.onDisconnect((reason) => {
-			messages.push(new SystemMessage(`Disconnected from socket. Reason provided is ${reason}`));
+			debugLog.push(new SystemMessage(`Disconnected from socket. Reason provided is ${reason}`));
 			connected = false;
 		});
 	};
@@ -57,13 +56,13 @@
 
 		peerPool.addEventListener('peerConnected', (event: any) => {
 			console.log('Peer connected event received:', event.detail);
-			messages.push(new SystemMessage(`Peer ${event.detail.peerId} connected`));
+			debugLog.push(new SystemMessage(`Peer ${event.detail.peerId} connected`));
 			connectedPeers.add(event.detail.peerId);
 		});
 
 		peerPool.addEventListener('peerDisconnected', (event: any) => {
 			console.log('Peer disconnected event received:', event.detail);
-			messages.push(new SystemMessage(`Peer ${event.detail.peerId} disconnected`));
+			debugLog.push(new SystemMessage(`Peer ${event.detail.peerId} disconnected`));
 			connectedPeers.delete(event.detail.peerId);
 		});
 
@@ -74,10 +73,10 @@
 	};
 
 	const disconnect = () => {
-		messages.push(new SystemMessage('disconnecting from the signaler...'));
+		debugLog.push(new SystemMessage('disconnecting from the signaler...'));
 
 		if (!signaler) {
-			messages.push(new SystemMessage('Not connected, nothing to disconnect from'));
+			debugLog.push(new SystemMessage('Not connected, nothing to disconnect from'));
 			return;
 		}
 
@@ -106,17 +105,17 @@
 		};
 
 		if (!isValidDirection(command)) {
-			messages.push(new SystemMessage(`Invalid move received from ${fromPeerId}: ${command}`));
+			debugLog.push(new SystemMessage(`Invalid move received from ${fromPeerId}: ${command}`));
 			return;
 		}
 
-		messages.push(new Message(fromPeerId, command));
-		moves.push(command);
+		debugLog.push(new LogMessage(fromPeerId, "", command));
+		snakeMoves.push(command);
 	};
 
 	const broadcastMove = (move: Move) => {
 		if (peerPool) {
-			messages.push(new Message(ownPeerId, move));
+			debugLog.push(new LogMessage(ownPeerId, "", move));
 			peerPool.broadcast(move);
 		}
 	};
@@ -133,7 +132,7 @@
 
 			autoPlayStartTime = scheduledTime;
 
-			messages.push(
+			debugLog.push(
 				new SystemMessage(`Scheduling the first message to be sent at ${scheduledTime})}`)
 			);
 
@@ -147,7 +146,7 @@
 
 	// the only messages I can now send are Game commands
 	const playMove = (move: Move) => {
-		moves.push(move);
+		snakeMoves.push(move);
 		// messages.push(new SystemMessage(`New move ${move}`));
 		broadcastMove(move);
 	};
@@ -169,10 +168,10 @@
 				X
 			</button>
 		</div>
-		{#if messages.length > 0}
+		{#if debugLog.length > 0}
 			<div class="items-center">
 				<ul>
-					{#each messages.slice().reverse() as message, i}
+					{#each debugLog.slice().reverse() as message, i}
 						<li class="m-2 font-mono text-xs">{message}</li>
 						<hr class="solid" />
 					{/each}
@@ -239,6 +238,6 @@
 
 	<!-- SNAKE -->
 	<div class="m-10">
-		<Snake actions={moves} onMove={playMove} />
+		<Snake actions={snakeMoves} onMove={playMove} />
 	</div>
 </div>
