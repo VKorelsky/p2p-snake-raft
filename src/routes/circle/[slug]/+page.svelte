@@ -139,14 +139,14 @@
 
 			setTimeout(() => {
 				autoPlayInterval = setInterval(() => {
-					broadcastMove(getRandomDirection());
+					playMove(getRandomDirection());
 				}, 10000);
 			}, delay);
 		}
 	};
 
 	// the only messages I can now send are Game commands
-	const handleMove = (move: Move) => {
+	const playMove = (move: Move) => {
 		moves.push(move);
 		// messages.push(new SystemMessage(`New move ${move}`));
 		broadcastMove(move);
@@ -229,7 +229,7 @@
 	</div>
 
 	<!-- AUTOPLAY INFO IF STARTED -->
-	{#if autoPlayStartTime && autoPlayInterval}
+	{#if autoPlayStartTime}
 	<div class="flex flex-row items-center justify-center pt-5">
 		<p class="text-center font-mono text-sm text-gray-600">
 			Auto play starting at {autoPlayStartTime.toLocaleTimeString()}
@@ -239,6 +239,6 @@
 
 	<!-- SNAKE -->
 	<div class="m-10">
-		<Snake actions={moves} onMove={handleMove} />
+		<Snake actions={moves} onMove={playMove} />
 	</div>
 </div>
