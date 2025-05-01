@@ -9,7 +9,6 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import Snake from '../../../components/Snake.svelte';
-	import type { MOVE } from 'p5';
 
 	const circleId = page.params.slug;
 
@@ -22,12 +21,13 @@
 	// svelte-ignore non_reactive_update
 	let connectedPeers: Set<string> = new SvelteSet();
 	let messages: IMessage[] = $state([]);
-	let moves: Move[] = $state(['UP', 'UP', 'RIGHT', 'RIGHT']);
+	let moves: Move[] = $state([]);
 	let drawerOpen: boolean = $state(false);
 
 	let peerPool: PeerPool | undefined = $state();
 
-	let autoMessageInterval: number | undefined = $state();
+	let autoPlayInterval: number | undefined = $state();
+	let autoPlayStartTime: Date | undefined = $state();
 
 	const connectToSignaler = () => {
 		messages.push(new SystemMessage('connecting the signaler...'));
@@ -69,7 +69,7 @@
 
 		peerPool.addEventListener('newMessage', (event: any) => {
 			console.log('New message event received:', event.detail);
-			processIncomingMessage(event.detail.peerId, event.detail.message);
+			processPeerMove(event.detail.peerId, event.detail.message);
 		});
 	};
 
@@ -100,58 +100,56 @@
 		disconnect();
 	});
 
-	const processIncomingMessage = (fromPeerId: string, message: string) => {
-		messages.push(new Message(fromPeerId, message));
+	const processPeerMove = (fromPeerId: string, command: string) => {
+		const isValidDirection = (command: string): command is Move => {
+			return ['UP', 'DOWN', 'LEFT', 'RIGHT'].includes(command);
+		};
+
+		if (!isValidDirection(command)) {
+			messages.push(new SystemMessage(`Invalid move received from ${fromPeerId}: ${command}`));
+			return;
+		}
+
+		messages.push(new Message(fromPeerId, command));
+		moves.push(command);
 	};
 
-	const sendMessage = (message: string) => {
+	const broadcastMove = (move: Move) => {
 		if (peerPool) {
-			messages.push(new Message(ownPeerId, message));
-			console.log('sending new message' + message);
-			peerPool.broadcast(message);
+			messages.push(new Message(ownPeerId, move));
+			peerPool.broadcast(move);
 		}
 	};
 
-	const toggleAutoMessage = () => {
-		if (autoMessageInterval) {
-			clearInterval(autoMessageInterval);
-			autoMessageInterval = undefined;
+	const toggleAutoPlay = () => {
+		if (autoPlayInterval) {
+			clearInterval(autoPlayInterval);
+			autoPlayInterval = undefined;
+			autoPlayStartTime = undefined;
 		} else {
 			const now = new Date();
 			const delay = (10 - (now.getSeconds() % 10)) * 1000 - now.getMilliseconds();
+			const scheduledTime = new Date(now.getTime() + delay);
+
+			autoPlayStartTime = scheduledTime;
 
 			messages.push(
-				new SystemMessage(
-					`Scheduling the first message to be sent at ${new Date(now.getTime() + delay)}`
-				)
+				new SystemMessage(`Scheduling the first message to be sent at ${scheduledTime})}`)
 			);
 
 			setTimeout(() => {
-				autoMessageInterval = setInterval(() => {
-					sendMessage(getRandomDirection());
+				autoPlayInterval = setInterval(() => {
+					broadcastMove(getRandomDirection());
 				}, 10000);
 			}, delay);
 		}
 	};
 
-	const onNewMessage = (e: SubmitEvent) => {
-		// prevent form submission
-		e.preventDefault();
-		const form = e.target as HTMLFormElement;
-		const data = new FormData(form);
-		const message = data.get('message') as string;
-
-		if (message) {
-			console.log('sending message');
-			sendMessage(message);
-		}
-
-		form.reset();
-	};
-
+	// the only messages I can now send are Game commands
 	const handleMove = (move: Move) => {
 		moves.push(move);
-		messages.push(new SystemMessage(`NEW MOVE ${move}`));
+		// messages.push(new SystemMessage(`New move ${move}`));
+		broadcastMove(move);
 	};
 </script>
 
@@ -213,13 +211,13 @@
 				class="h-auto w-auto rounded px-4 py-2 font-bold text-white
 					{!connected || !peerPool
 					? 'cursor-not-allowed bg-gray-400'
-					: autoMessageInterval
+					: autoPlayInterval
 						? 'bg-red-500 hover:bg-red-700'
 						: 'bg-green-500 hover:bg-green-700'}"
-				onclick={toggleAutoMessage}
+				onclick={toggleAutoPlay}
 				disabled={!connected || !peerPool}
 			>
-				{autoMessageInterval ? 'Stop' : 'Start'} auto play
+				{autoPlayInterval ? 'Stop' : 'Start'} auto play
 			</button>
 			<button
 				class="h-auto w-auto rounded bg-blue-500 px-4 py-2 font-bold text-white hover:bg-blue-700"
@@ -230,8 +228,17 @@
 		</div>
 	</div>
 
+	<!-- AUTOPLAY INFO IF STARTED -->
+	{#if autoPlayStartTime && autoPlayInterval}
+	<div class="flex flex-row items-center justify-center pt-5">
+		<p class="text-center font-mono text-sm text-gray-600">
+			Auto play starting at {autoPlayStartTime.toLocaleTimeString()}
+		</p>
+	</div>
+	{/if}
+
 	<!-- SNAKE -->
-	<div class="m-20">
+	<div class="m-10">
 		<Snake actions={moves} onMove={handleMove} />
 	</div>
 </div>
