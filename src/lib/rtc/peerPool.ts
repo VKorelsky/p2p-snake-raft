@@ -2,7 +2,7 @@ import { PeerConnection } from './peerConnection';
 import type { newOfferEvent, Signaler } from './signaler';
 
 // TODO TYPES
-// ======== events ========  
+// ======== events ========
 // newPeerConnected
 // peerDisconnectedEvent
 // newMessage
@@ -31,15 +31,21 @@ export class PeerPool extends EventTarget {
 	}
 
 	public sendMessage(toPeerId: string, message: string) {
-		// find the peer and throw an exception if not found
+		if (!(toPeerId in this.peers)) {
+			throw new Error(`No peer found matching the id ${toPeerId}`);
+		}
 
-		// then check if the datachannel is open 
+		const con = this.peers[toPeerId];
 
-		// then send a message
+		if (!con.isOpen) {
+			throw new Error(`Connection to peer with id ${toPeerId} is not open`);
+		}
+
+		con.sendMessage(message);
 	}
 
 	public close() {
-		Object.values(this.peers).forEach(con => con.close());
+		Object.values(this.peers).forEach((con) => con.close());
 	}
 
 	private getNewRoomMemberHandler() {

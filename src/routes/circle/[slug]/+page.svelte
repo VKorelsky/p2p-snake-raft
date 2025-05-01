@@ -130,13 +130,13 @@
 			return;
 		}
 
-		debugLog.push(`[${fromPeerId}] - ${move}`);
+		debugLog.push(`${move}`);
 		snakeMoves.push(move);
 	};
 
 	const broadcastMove = (move: Move) => {
 		if (peerPool) {
-			debugLog.push(`Broadcasting move ${move}`);
+			debugLog.push(`${move}`);
 			peerPool.broadcast(move);
 		}
 	};
@@ -168,7 +168,6 @@
 	// the only messages I can now send are Game commands
 	const playMove = (move: Move) => {
 		snakeMoves.push(move);
-		// messages.push(new SystemMessage(`New move ${move}`));
 		broadcastMove(move);
 	};
 </script>
