@@ -98,14 +98,16 @@ export class LogObserver extends EventTarget {
 			this.initPeerPool(sessionIdentifier);
 		});
 
-		this.signaler.onConnectError((err) => {});
+		this.signaler.onConnectError((err) => {
+			console.error(err);
+		});
 
 		this.signaler.onDisconnect((reason) => {
 			console.log(`Disconnected from socket. Reason provided is ${reason}`);
 		});
 	}
 
-	public share(newEntry: string) {
+	public append(newEntry: string) {
 		if (!this.peerPool) {
 			throw new Error('Cannot share log entry: PeerPool is not initialized.');
 		}
@@ -121,7 +123,20 @@ export class LogObserver extends EventTarget {
 		return this.type;
 	}
 
-	public leave(): void {}
+	public leave(): void {
+		console.log('disconnecting from the signaler...');
+
+		if (!this.signaler) {
+			console.log('Not connected, nothing to disconnect from');
+			return;
+		}
+
+		this.signaler.close();
+
+		if (this.peerPool) {
+			this.peerPool.close();
+		}
+	}
 
 	private initPeerPool(ownId: ClusterMemberId) {
 		this.ownId = ownId;
@@ -149,7 +164,11 @@ export class LogObserver extends EventTarget {
 			console.log('New message event received:', event.detail);
 
 			// a lot of magic to build here to parse the various possible RPCs, but for now just passing the event through
-			const dispatch = new CustomEvent('newLogEntry', { detail: {} });
+			const dispatch = new CustomEvent('newLogEntry', {
+				detail: {
+					entry: event.detail.message
+				}
+			});
 			this.dispatchEvent(dispatch);
 		});
 	}

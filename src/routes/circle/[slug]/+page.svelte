@@ -1,116 +1,37 @@
 <script lang="ts">
-	import { page } from '$app/state';
-	import { PeerPool } from '$lib/rtc/peerPool';
-	import { Signaler } from '$lib/rtc/signaler';
-	import type { Move, Stringifiable } from '$lib/types';
-	import { getRandomDirection, SystemMessage } from '$lib/utils';
+	import { LogObserver } from '$lib/consensus/logObserver';
+	import type { Move } from '$lib/types';
+	import { getRandomDirection } from '$lib/utils';
 	import { onDestroy, onMount } from 'svelte';
-	import { SvelteSet } from 'svelte/reactivity';
 	import Snake from '../../../components/Snake.svelte';
 
-	const circleId = page.params.slug;
-
+	let logObserver: LogObserver | undefined = $state();
+	let connectedPeerCount: number = $state(0);
 	let connected: boolean = $state(false);
-	let signaler: Signaler | undefined = $state();
 	let ownPeerId: string = $state('');
 
-	/*
-		const logObserver = new LogObserver()
-
-		// join connects to the signaler and initializes the peerPool
-		// it then waits until it hears from a leader or triggers an election
-		// [DO LATER] here it might also choose to request a snapshot from the leader so it can update it's state
-		
-		// once it has either become the leader or figured out who the leader is, it's ready to update it's view of the replicated log
-		// from the POV of the component that needs stateful log 
-
-		cluster.addEventListener("newLogEntry", (event) => {
-			// apply new entries 
-			snakeMoves.push(entry.move);
-		})
-
-		logObserver.observe()
-
-		const onMovePlayed = (move) => {
-			logObserver.share(move);
-		}
-	*/
-
-	// TODO this might be a svelte compiler bug?
-	// complaining that I am accessing the variable but not declaring it in $state
-	// svelte-ignore non_reactive_update
-	let connectedPeers: Set<string> = new SvelteSet();
-	let debugLog: Stringifiable[] = $state([]);
 	let snakeMoves: Move[] = $state([]);
+
 	let drawerOpen: boolean = $state(false);
-
-	let peerPool: PeerPool | undefined = $state();
-
 	let autoPlayInterval: number | undefined = $state();
 	let autoPlayStartTime: Date | undefined = $state();
 
-	const connectToSignaler = () => {
-		debugLog.push(new SystemMessage('connecting the signaler...'));
-		signaler = new Signaler(circleId);
+	const connect = () => {
+		logObserver = new LogObserver();
 
-		signaler.onConnect((sessionIdentifier) => {
-			debugLog.push(new SystemMessage('connected to the signaler...'));
-			connected = true;
-			ownPeerId = sessionIdentifier;
-			// TODO probably a better pattern for doing this rather than relying on component level state
-			// will allow avoiding having to explicitly tell TS that the signaler won't be null at peer pool initialization
-			initPeerPool();
+		logObserver.addEventListener('peerConnected', () => (connectedPeerCount += 1));
+		logObserver.addEventListener('peerDisconnected', () => (connectedPeerCount -= 1));
+
+		logObserver.addEventListener('newLogEntry', (event: any) => {
+			processNewMove(event.detail!.entry);
 		});
 
-		signaler.onConnectError((err) => {
-			debugLog.push(new SystemMessage(`Error while attempting connection ${err}`));
-		});
-
-		signaler.onDisconnect((reason) => {
-			debugLog.push(new SystemMessage(`Disconnected from socket. Reason provided is ${reason}`));
-			connected = false;
-		});
+		// todo probably should have some event to indicate that I am succesfully connected instead of blindly assuming
+		connected = true;
+		logObserver.startObserving();
 	};
 
-	const initPeerPool = () => {
-		peerPool = new PeerPool(ownPeerId, signaler!);
-
-		peerPool.addEventListener('peerConnected', (event: any) => {
-			console.log('Peer connected event received:', event.detail);
-			debugLog.push(new SystemMessage(`Peer ${event.detail.peerId} connected`));
-			connectedPeers.add(event.detail.peerId);
-		});
-
-		peerPool.addEventListener('peerDisconnected', (event: any) => {
-			console.log('Peer disconnected event received:', event.detail);
-			debugLog.push(new SystemMessage(`Peer ${event.detail.peerId} disconnected`));
-			connectedPeers.delete(event.detail.peerId);
-		});
-
-		peerPool.addEventListener('newMessage', (event: any) => {
-			console.log('New message event received:', event.detail);
-			processPeerMove(event.detail.peerId, event.detail.message);
-		});
-	};
-
-	const disconnect = () => {
-		debugLog.push(new SystemMessage('disconnecting from the signaler...'));
-
-		if (!signaler) {
-			debugLog.push(new SystemMessage('Not connected, nothing to disconnect from'));
-			return;
-		}
-
-		connected = false;
-		// TODO could this be set from the peerPool directly? hmm
-		connectedPeers.clear();
-
-		signaler.close();
-
-		if (peerPool) {
-			peerPool.close();
-		}
-	};
+	const disconnect = () => {};
 
 	onMount(() => {
 		// do nothing for now, eventually maybe connect to the signaler
@@ -120,25 +41,17 @@
 		disconnect();
 	});
 
-	const processPeerMove = (fromPeerId: string, move: string) => {
+	const processNewMove = (move: string) => {
 		const isValidDirection = (command: string): command is Move => {
 			return ['UP', 'DOWN', 'LEFT', 'RIGHT'].includes(command);
 		};
 
 		if (!isValidDirection(move)) {
-			debugLog.push(new SystemMessage(`Invalid move received from ${fromPeerId}: ${move}`));
+			console.error(`Invalid move received ${move}`);
 			return;
 		}
 
-		debugLog.push(`${move}`);
 		snakeMoves.push(move);
-	};
-
-	const broadcastMove = (move: Move) => {
-		if (peerPool) {
-			debugLog.push(`${move}`);
-			peerPool.broadcast(move);
-		}
 	};
 
 	const toggleAutoPlay = () => {
@@ -153,10 +66,6 @@
 
 			autoPlayStartTime = scheduledTime;
 
-			debugLog.push(
-				new SystemMessage(`Scheduling the first message to be sent at ${scheduledTime})}`)
-			);
-
 			setTimeout(() => {
 				autoPlayInterval = setInterval(() => {
 					playMove(getRandomDirection());
@@ -168,7 +77,9 @@
 	// the only messages I can now send are Game commands
 	const playMove = (move: Move) => {
 		snakeMoves.push(move);
-		broadcastMove(move);
+		if (logObserver) {
+			logObserver.append(move);
+		}
 	};
 </script>
 
@@ -188,10 +99,10 @@
 				X
 			</button>
 		</div>
-		{#if debugLog.length > 0}
+		{#if snakeMoves.length > 0}
 			<div class="items-center">
 				<ul>
-					{#each debugLog.slice().reverse() as message, i}
+					{#each snakeMoves.slice().reverse() as message, i}
 						<li class="m-2 font-mono text-xs">{message}</li>
 						<hr class="solid" />
 					{/each}
@@ -212,8 +123,9 @@
 	<!-- ROOM INFO -->
 	<div class="my-7">
 		<p class="text-shadow-blue-50">
-			<b>You are</b>: {ownPeerId ? ownPeerId : 'N/A'} <br /><b>Peers:</b>
-			{connectedPeers.size}
+			<b>You are</b>: {ownPeerId ? ownPeerId : 'N/A'}
+			<br />
+			<b>Peers:</b>{connectedPeerCount}
 		</p>
 	</div>
 
@@ -222,19 +134,19 @@
 		<div class="flex flex-row space-x-4">
 			<button
 				class="h-auto w-auto rounded bg-blue-500 px-4 py-2 font-bold text-white hover:bg-blue-700"
-				onclick={connected ? disconnect : connectToSignaler}
+				onclick={connected ? disconnect : connect}
 			>
 				{connected ? 'Disconnect' : 'Connect'}
 			</button>
 			<button
 				class="h-auto w-auto rounded px-4 py-2 font-bold text-white
-					{!connected || !peerPool
+					{!connected
 					? 'cursor-not-allowed bg-gray-400'
 					: autoPlayInterval
 						? 'bg-red-500 hover:bg-red-700'
 						: 'bg-green-500 hover:bg-green-700'}"
 				onclick={toggleAutoPlay}
-				disabled={!connected || !peerPool}
+				disabled={!connected}
 			>
 				{autoPlayInterval ? 'Stop' : 'Start'} auto play
 			</button>

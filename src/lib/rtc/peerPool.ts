@@ -1,7 +1,7 @@
 import { PeerConnection } from './peerConnection';
 import type { newOfferEvent, Signaler } from './signaler';
 
-// TODO TYPES
+// TODO all the events should be typed!!
 // ======== events ========
 // newPeerConnected
 // peerDisconnectedEvent
