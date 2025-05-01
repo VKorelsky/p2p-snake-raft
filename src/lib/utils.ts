@@ -1,7 +1,11 @@
-import type { Move } from "./model/game";
+import type { Move } from "./types";
 
 export const getRandomNumber = (max: number) => {
-	return Math.floor(Math.random() * max);
+	return getRandomNumberInRange(0, max)
+};
+
+export const getRandomNumberInRange = (min: number, max: number) => {
+	return min + Math.floor(Math.random() * (max - min));
 };
 
 export const capitalize = (str: string): string => {

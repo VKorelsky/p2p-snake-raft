@@ -1,32 +1,32 @@
 import type { Serializable } from '$lib/types';
-import type { ObservedLogEntry } from './log';
+import type { ObservedLogEntry } from './logObserver';
 
 // TODO move to zod or protobuf probably instead of everything OOP
 export class AppendEntryMessage implements Serializable {
-    constructor(
-        public term: number,
-        public leaderId: string,
-        public prevLogMetadata: { index: number; term: number },
-        public newLogEntries: ObservedLogEntry<any>[],
-        public leaderCommitIndex: number
-    ) {
-        this.term = term;
-        this.leaderId = leaderId;
-        this.prevLogMetadata = prevLogMetadata;
-        this.newLogEntries = newLogEntries;
-        this.leaderCommitIndex = leaderCommitIndex;
-    }
+	constructor(
+		public term: number,
+		public leaderId: string,
+		public prevLogMetadata: { index: number; term: number },
+		public newLogEntry: ObservedLogEntry<any>,
+		public leaderCommitIndex: number
+	) {
+		this.term = term;
+		this.leaderId = leaderId;
+		this.prevLogMetadata = prevLogMetadata;
+		this.newLogEntry = newLogEntry;
+		this.leaderCommitIndex = leaderCommitIndex;
+	}
 
-    toJson(): string {
-        return JSON.stringify({
-            type: 'AppendEntryRequest',
-            term: this.term,
-            leaderId: this.leaderId,
-            prevLogMetadata: this.prevLogMetadata,
-            newLogEntries: this.newLogEntries,
-            leaderCommitIndex: this.leaderCommitIndex
-        });
-    }
+	toJson(): string {
+		return JSON.stringify({
+			type: 'AppendEntryRequest',
+			term: this.term,
+			leaderId: this.leaderId,
+			prevLogMetadata: this.prevLogMetadata,
+			newLogEntries: this.newLogEntry,
+			leaderCommitIndex: this.leaderCommitIndex
+		});
+	}
 }
 
 export class AppendEntryResponse implements Serializable {
@@ -38,32 +38,31 @@ export class AppendEntryResponse implements Serializable {
 		this.success = success;
 	}
 
-    toJson(): string {
-        return JSON.stringify({
-            type: 'AppendEntryResponse',
-            term: this.term,
-            success: this.success
-        });
-    }
+	toJson(): string {
+		return JSON.stringify({
+			type: 'AppendEntryResponse',
+			term: this.term,
+			success: this.success
+		});
+	}
 }
 
 // message used to request a vote
-export class RequestElectionMessage<T> implements Serializable {
+export class RequestElectionMessage implements Serializable {
 	constructor(
 		public term: number,
 		public candidateId: string,
-		public lastLogEntry: ObservedLogEntry<T>
+		public lastLogEntryMetadata: { index: number; term: number },
 	) {
 		this.term = term;
 		this.candidateId = candidateId;
-		this.lastLogEntry = lastLogEntry;
+		this.lastLogEntryMetadata = lastLogEntryMetadata;
 	}
 
 	toJson(): string {
 		return JSON.stringify({ type: 'RequestElectionMessage' });
 	}
 }
-
 
 export class RequestElectionResponse implements Serializable {
 	constructor(
@@ -74,13 +73,13 @@ export class RequestElectionResponse implements Serializable {
 		this.voteGranted = voteGranted;
 	}
 
-    toJson(): string {
-        return JSON.stringify({
-            type: 'AppendEntryResponse',
-            term: this.term,
-            voteGranted: this.voteGranted
-        });
-    }
+	toJson(): string {
+		return JSON.stringify({
+			type: 'AppendEntryResponse',
+			term: this.term,
+			voteGranted: this.voteGranted
+		});
+	}
 }
 
 // TBD

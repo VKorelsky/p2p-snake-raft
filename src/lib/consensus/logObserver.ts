@@ -1,12 +1,19 @@
 import { PeerPool } from '$lib/rtc/peerPool';
 import { Signaler } from '$lib/rtc/signaler';
 import type { Serializable } from '$lib/types';
+import { getRandomNumber, getRandomNumberInRange } from '$lib/utils';
+import {
+	AppendEntryResponse,
+	RequestElectionResponse,
+	type AppendEntryMessage,
+	type RequestElectionMessage
+} from './message';
 
 type LogObserverType = 'LEADER' | 'FOLLOWER' | 'CANDIDATE';
 type ClusterMemberId = string;
 
 // This is the replicated log
-class ObservedLogEntry<T> implements Serializable {
+export class ObservedLogEntry<T> implements Serializable {
 	entry: T;
 	term: number;
 
@@ -31,9 +38,10 @@ class ObservedLogEntry<T> implements Serializable {
 interface ObservedState {
 	currentTerm: number;
 	leaderId: ClusterMemberId;
-	log: ObservedLogEntry<string>[]; // TODO type the strings into actual moves
+	log: (ObservedLogEntry<string> | null)[]; // TODO type the strings into actual moves
 	idxLastCommitted: number;
 	idxLastApplied: number;
+	peerCount: number; // invariant -> on a leader, this is up to date. Anyways we will start with
 
 	// only present if observer is leader
 	replicationState?: {
@@ -66,6 +74,19 @@ interface NewPeerConnected extends Event<{}> {}
 // peerDisconnected
 interface PeerDisconnected extends Event<{}> {}
 
+// OK so how does this work.
+// I join. I'm initially a follower
+// I wait for a leader to show up
+// If there is no leader, I send out an election RPC (if no response, i try again after electionTimeout)
+// if there is a response, then I become leader or not
+
+// append message
+// if I am leader, I send append RPC to everyone else.
+// if I am not, I send the request to the leader, who will then broadcast it
+// the leader must keep track of how many responses it got for a specific index and term. If it got more than half of the observed peer count responses
+// then it commits to the log and schedules a new entry event
+// otherwise just increment the observed count
+
 // abstraction over a peer pool that is used to broadcast and send messages
 // TODO peerPool and Signaler should have some methods to create them before connecting
 export class LogObserver extends EventTarget {
@@ -73,21 +94,26 @@ export class LogObserver extends EventTarget {
 	private signaler?: Signaler;
 	private type: LogObserverType;
 	private ownId?: ClusterMemberId;
-	private votedFor: ClusterMemberId;
+	private votedFor?: ClusterMemberId;
 	private observedState: ObservedState;
+	private electionTimeoutMs: number;
+	private electionInterval?: number;
 
 	public constructor() {
 		super();
 		// initial state
 		this.type = 'FOLLOWER';
-		this.votedFor = '0';
 		this.observedState = {
 			currentTerm: 0,
 			leaderId: '',
-			log: [],
+			peerCount: 0,
+			log: new Array(100).fill(null),
 			idxLastApplied: 0,
 			idxLastCommitted: 0
 		};
+		this.electionTimeoutMs = getRandomNumberInRange(3000, 5000);
+
+		this.resetElectionInterval();
 	}
 
 	public startObserving(): void {
@@ -145,6 +171,7 @@ export class LogObserver extends EventTarget {
 
 		this.peerPool.addEventListener('peerConnected', (event: any) => {
 			console.log(`Peer ${event.detail.peerId} connected`);
+			this.observedState.peerCount += 1;
 
 			const dispatch = new CustomEvent('peerConnected', {
 				detail: {}
@@ -155,6 +182,7 @@ export class LogObserver extends EventTarget {
 
 		this.peerPool.addEventListener('peerDisconnected', (event: any) => {
 			console.log(`Peer ${event.detail.peerId} disconnected`);
+			this.observedState.peerCount -= 1;
 
 			const dispatch = new CustomEvent('peerDisconnected', { detail: {} });
 			this.dispatchEvent(dispatch);
@@ -162,14 +190,123 @@ export class LogObserver extends EventTarget {
 
 		this.peerPool.addEventListener('newMessage', (event: any) => {
 			console.log('New message event received:', event.detail);
-
-			// a lot of magic to build here to parse the various possible RPCs, but for now just passing the event through
-			const dispatch = new CustomEvent('newLogEntry', {
-				detail: {
-					entry: event.detail.message
-				}
-			});
-			this.dispatchEvent(dispatch);
+			this.processIncomingMessage(event.detail.peerId, event.detail.message);
 		});
+	}
+
+	// Deserialize and route message
+	private processIncomingMessage(fromPeerId: string, message: string) {}
+
+	// ================= APPEND ENTRY ==================
+	private appendEntry(entry: string) {}
+
+	private handleAppendEntryMessage(fromPeerId: string, message: AppendEntryMessage) {
+		if (message.term < this.observedState.currentTerm) {
+			this.peerPool!.sendMessage(
+				fromPeerId,
+				new AppendEntryResponse(this.observedState.currentTerm, false)
+			);
+			return;
+		}
+
+		if (
+			this.observedState.log[message.prevLogMetadata.index]?.term !== message.prevLogMetadata.term
+		) {
+			this.peerPool!.sendMessage(
+				fromPeerId,
+				new AppendEntryResponse(this.observedState.currentTerm, false)
+			);
+			return;
+		}
+
+		const newEntry = message.newLogEntry;
+
+		if ((newEntry.entry = '')) {
+			// heartbeat message
+			this.resetElectionInterval();
+			return;
+		}
+
+		this.applyLogEntry(
+			message.prevLogMetadata.index + 1,
+			message.newLogEntry.entry,
+			message.leaderCommitIndex
+		);
+
+		this.peerPool!.sendMessage(
+			fromPeerId,
+			new AppendEntryResponse(this.observedState.currentTerm, true)
+		);
+	}
+
+	private handleAppendEntryResponse(fromPeerId: string, message: AppendEntryResponse) {}
+
+	// ================= REQUEST ELECTION ==================
+	private requestElection() {}
+
+	private handleRequestElectionMessage(fromPeerId: string, message: RequestElectionMessage) {
+		const termIsGreaterThanOrEqual = message.term < this.observedState.currentTerm;
+
+		const isLogUpToDate =
+			message.lastLogEntryMetadata.term === this.observedState.currentTerm &&
+			message.lastLogEntryMetadata.index === this.observedState.idxLastApplied;
+
+		const voteGranted = this.votedFor === undefined && termIsGreaterThanOrEqual && isLogUpToDate;
+
+		this.peerPool!.sendMessage(
+			fromPeerId,
+			new RequestElectionResponse(this.observedState.currentTerm, voteGranted)
+		);
+
+		this.votedFor = fromPeerId;
+	}
+
+	private handleRequestElectionResponse(fromPeerId: string, message: RequestElectionResponse) {}
+
+	private applyLogEntry(index: number, entry: string, leaderCommitIndex: number) {
+		const newLogEntry = new ObservedLogEntry(entry, this.observedState.currentTerm);
+
+		if (this.observedState.log[index] !== null) {
+			// an entry is already present on my node
+			// overwrite it and delete all entries that follow
+			this.observedState.log[index] = newLogEntry;
+			const ptr = index + 1;
+
+			while (this.observedState.log[ptr] != null) {
+				this.observedState.log[ptr] = null;
+			}
+		} else {
+			// just add it
+			this.observedState.log[index] = newLogEntry;
+		}
+
+		this.observedState.idxLastCommitted = index;
+		// TODO -> understand why?
+		this.observedState.idxLastCommitted = Math.min(leaderCommitIndex, index);
+
+		// TODO probably need an event to say that I removed a log entry if I update my local state
+		const dispatch = new CustomEvent('newLogEntry', {
+			detail: {
+				entry: entry
+			}
+		});
+
+		this.dispatchEvent(dispatch);
+	}
+
+	private resetElectionInterval() {
+		if (this.electionInterval) {
+			clearInterval(this.electionInterval);
+		}
+
+		this.electionInterval = setInterval(() => {
+			console.log('No heartbeat detected, triggering election');
+			// Convert to candidate
+			this.type = 'CANDIDATE';
+			this.observedState.replicationState = undefined; // clear if it was set
+			
+			// request election
+			this.requestElection();
+		}, this.electionTimeoutMs);
 	}
 }

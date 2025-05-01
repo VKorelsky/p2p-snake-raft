@@ -1,3 +1,4 @@
+import type { Serializable } from '$lib/types';
 import { PeerConnection } from './peerConnection';
 import type { newOfferEvent, Signaler } from './signaler';
 
@@ -26,11 +27,11 @@ export class PeerPool extends EventTarget {
 		return Object.keys(this.peers).length;
 	}
 
-	public broadcast(message: string) {
-		Object.values(this.peers).forEach((con) => con.isOpen() && con.sendMessage(message));
+	public broadcast(message: Serializable) {
+		Object.values(this.peers).forEach((con) => con.isOpen() && con.sendMessage(message.toJson()));
 	}
 
-	public sendMessage(toPeerId: string, message: string) {
+	public sendMessage(toPeerId: string, message: Serializable) {
 		if (!(toPeerId in this.peers)) {
 			throw new Error(`No peer found matching the id ${toPeerId}`);
 		}
@@ -41,7 +42,7 @@ export class PeerPool extends EventTarget {
 			throw new Error(`Connection to peer with id ${toPeerId} is not open`);
 		}
 
-		con.sendMessage(message);
+		con.sendMessage(message.toJson());
 	}
 
 	public close() {
