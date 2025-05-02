@@ -6,13 +6,15 @@ export class AppendEntryMessage implements Serializable {
 	constructor(
 		public term: number,
 		public leaderId: string,
-		public prevLogMetadata: { index: number; term: number },
+		public prevLogIndex: number,
+		public prevLogTerm: number,
 		public newLogEntry: ObservedLogEntry<any>,
 		public leaderCommitIndex: number
 	) {
 		this.term = term;
 		this.leaderId = leaderId;
-		this.prevLogMetadata = prevLogMetadata;
+		this.prevLogIndex = prevLogIndex;
+		this.prevLogTerm = prevLogTerm;
 		this.newLogEntry = newLogEntry;
 		this.leaderCommitIndex = leaderCommitIndex;
 	}
@@ -22,7 +24,8 @@ export class AppendEntryMessage implements Serializable {
 			type: 'AppendEntryRequest',
 			term: this.term,
 			leaderId: this.leaderId,
-			prevLogMetadata: this.prevLogMetadata,
+			prevLogIndex: this.prevLogIndex,
+			prevLogTerm: this.prevLogTerm,
 			newLogEntries: this.newLogEntry,
 			leaderCommitIndex: this.leaderCommitIndex
 		});
@@ -52,7 +55,7 @@ export class RequestElectionMessage implements Serializable {
 	constructor(
 		public term: number,
 		public candidateId: string,
-		public lastLogEntryMetadata: { index: number; term: number },
+		public lastLogEntryMetadata: { index: number; term: number }
 	) {
 		this.term = term;
 		this.candidateId = candidateId;

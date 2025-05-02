@@ -69,7 +69,7 @@
 			setTimeout(() => {
 				autoPlayInterval = setInterval(() => {
 					playMove(getRandomDirection());
-				}, 10000);
+				}, 1000);
 			}, delay);
 		}
 	};
@@ -123,9 +123,7 @@
 	<!-- ROOM INFO -->
 	<div class="my-7">
 		<p class="text-shadow-blue-50">
-			<b>You are</b>: {ownPeerId ? ownPeerId : 'N/A'}
-			<br />
-			<b>Peers:</b>{connectedPeerCount}
+			<b>Peers:</b> {connectedPeerCount}
 		</p>
 	</div>
 

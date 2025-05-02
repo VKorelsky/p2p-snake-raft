@@ -13,13 +13,22 @@ type LogObserverType = 'LEADER' | 'FOLLOWER' | 'CANDIDATE';
 type ClusterMemberId = string;
 
 // This is the replicated log
+// make it a  linked list
 export class ObservedLogEntry<T> implements Serializable {
 	entry: T;
 	term: number;
+	index: number;
+	committed: boolean;
 
-	constructor(content: T, term: number) {
+	constructor(content: T, index: number, term: number) {
 		this.entry = content;
 		this.term = term;
+		this.index = index;
+		this.committed = false;
+	}
+
+	public commit() {
+		this.committed = true;
 	}
 
 	toString(): string {
@@ -74,20 +83,8 @@ interface NewPeerConnected extends Event<{}> {}
 // peerDisconnected
 interface PeerDisconnected extends Event<{}> {}
 
-// OK so how does this work.
-// I join. I'm initially a follower
-// I wait for a leader to show up
-// If there is no leader, I send out an election RPC (if no response, i try again after electionTimeout)
-// if there is a response, then I become leader or not
+const addEventListener = (name: string, event: (event: any) => void) => {};
 
-// append message
-// if I am leader, I send append RPC to everyone else.
-// if I am not, I send the request to the leader, who will then broadcast it
-// the leader must keep track of how many responses it got for a specific index and term. If it got more than half of the observed peer count responses
-// then it commits to the log and schedules a new entry event
-// otherwise just increment the observed count
-
-// abstraction over a peer pool that is used to broadcast and send messages
 // TODO peerPool and Signaler should have some methods to create them before connecting
 export class LogObserver extends EventTarget {
 	private peerPool?: PeerPool;
@@ -96,7 +93,9 @@ export class LogObserver extends EventTarget {
 	private ownId?: ClusterMemberId;
 	private votedFor?: ClusterMemberId;
 	private observedState: ObservedState;
-	private electionTimeoutMs: number;
+	private electionIntervalMs: number;
+	private heartbeatIntervalMs: number;
+	private heartbeatInterval?: number;
 	private electionInterval?: number;
 
 	public constructor() {
@@ -111,7 +110,8 @@ export class LogObserver extends EventTarget {
 			idxLastApplied: 0,
 			idxLastCommitted: 0
 		};
-		this.electionTimeoutMs = getRandomNumberInRange(3000, 5000);
+		this.electionIntervalMs = getRandomNumberInRange(3000, 5000);
+		this.heartbeatIntervalMs = 2000; // must be below election interval, otherwise elections will be triggered.
 
 		this.resetElectionInterval();
 	}
@@ -209,9 +209,10 @@ export class LogObserver extends EventTarget {
 			return;
 		}
 
-		if (
-			this.observedState.log[message.prevLogMetadata.index]?.term !== message.prevLogMetadata.term
-		) {
+		const previousEntriesMatch =
+			message.prevLogTerm === this.observedState.log[message.prevLogIndex]?.term;
+
+		if (!previousEntriesMatch) {
 			this.peerPool!.sendMessage(
 				fromPeerId,
 				new AppendEntryResponse(this.observedState.currentTerm, false)
@@ -221,14 +222,14 @@ export class LogObserver extends EventTarget {
 
 		const newEntry = message.newLogEntry;
 
-		if ((newEntry.entry = '')) {
+		if (newEntry.entry === '') {
 			// heartbeat message
 			this.resetElectionInterval();
 			return;
 		}
 
 		this.applyLogEntry(
-			message.prevLogMetadata.index + 1,
+			message.prevLog.index + 1,
 			message.newLogEntry.entry,
 			message.leaderCommitIndex
 		);
@@ -263,7 +264,9 @@ export class LogObserver extends EventTarget {
 
 	private handleRequestElectionResponse(fromPeerId: string, message: RequestElectionResponse) {}
 
-	private applyLogEntry(index: number, entry: string, leaderCommitIndex: number) {
+	private applyLogEntry(entry: string, index: number, leaderCommitIndex: number) {
+		// what do I know here?
+
 		const newLogEntry = new ObservedLogEntry(entry, this.observedState.currentTerm);
 
 		if (this.observedState.log[index] !== null) {
@@ -284,7 +287,7 @@ export class LogObserver extends EventTarget {
 		// TODO -> understand why?
 		this.observedState.idxLastCommitted = Math.min(leaderCommitIndex, index);
 
-		// TODO probably need an event to say that I removed a log entry if I update my local state
+		// Only dispatch when an entry is committed
 		const dispatch = new CustomEvent('newLogEntry', {
 			detail: {
 				entry: entry
@@ -304,9 +307,9 @@ export class LogObserver extends EventTarget {
 			// Convert to candidate
 			this.type = 'CANDIDATE';
 			this.observedState.replicationState = undefined; // clear if it was set
-			
+
 			// request election
 			this.requestElection();
-		}, this.electionTimeoutMs);
+		}, this.electionIntervalMs);
 	}
 }
