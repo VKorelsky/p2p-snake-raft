@@ -370,13 +370,7 @@ export class LogObserver extends EventTarget {
 				entry.commit();
 
 				// TODO make a private method for this
-				const dispatch = new CustomEvent('newLogEntry', {
-					detail: {
-						entry: entry.entry
-					}
-				});
-
-				this.dispatchEvent(dispatch);
+				this.applyEntry(entry.entry);
 			}
 
 			this.idxLastApplied += 1;
@@ -429,14 +423,7 @@ export class LogObserver extends EventTarget {
 			if (!entry.committed && entry.acks >= this.getQuorumSize()) {
 				entry.commit();
 				this.idxLastReplicated = idxEntry;
-
-				const dispatch = new CustomEvent('newLogEntry', {
-					detail: {
-						entry: entry.entry
-					}
-				});
-
-				this.dispatchEvent(dispatch);
+				this.applyEntry(entry.entry);
 				// dispatching the message is equivalent to applying the entry to the state machine
 				this.idxLastApplied = idxEntry;
 			}
@@ -579,5 +566,15 @@ export class LogObserver extends EventTarget {
 
 	private getQuorumSize() {
 		return Math.floor(this.getPeerCount() / 2) + 1;
+	}
+
+	private applyEntry(entry: string) {
+		const dispatch = new CustomEvent('newLogEntry', {
+			detail: {
+				entry: entry
+			}
+		});
+
+		this.dispatchEvent(dispatch);
 	}
 }

@@ -7,6 +7,12 @@
     - All event names should be constants
 - Iterator over peer pool so that I can ping each peer separately
 
+
+CHECKPOINT 06/05:
+- missing initialization of the cluster
+- missing election algorithms 
+- missing console.log everywhere to check if it can work ok
+
 Algo related 
 - Optimize by sending batches of event instead of one event at a time
 - Add console.log to all of the behaviour so we can keep track of what is going on
