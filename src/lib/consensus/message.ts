@@ -8,7 +8,7 @@ export class AppendEntryMessage implements Serializable {
 		public leaderId: string,
 		public prevLogIndex: number,
 		public prevLogTerm: number,
-		public newLogEntry: ObservedLogEntry<any>,
+		public newLogEntry: string,
 		public leaderCommitIndex: number
 	) {
 		this.term = term;
@@ -91,5 +91,19 @@ export class RequestSnapshotMessage implements Serializable {
 	// TBD, not part of the original spec
 	toJson(): string {
 		return JSON.stringify({ type: 'RequestSnapshotMessage' });
+	}
+}
+
+// A client message asking the leader to write a message to the log //
+export class RequestAppendMessage implements Serializable {
+	constructor(public msg: string) {
+		this.msg = msg;
+	}
+
+	toJson(): string {
+		return JSON.stringify({
+			type: 'WriteMessage',
+			msg: this.msg
+		});
 	}
 }

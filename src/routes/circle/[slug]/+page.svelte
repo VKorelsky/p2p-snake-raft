@@ -8,7 +8,6 @@
 	let logObserver: LogObserver | undefined = $state();
 	let connectedPeerCount: number = $state(0);
 	let connected: boolean = $state(false);
-	let ownPeerId: string = $state('');
 
 	let snakeMoves: Move[] = $state([]);
 

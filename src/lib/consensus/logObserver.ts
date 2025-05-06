@@ -1,65 +1,14 @@
 import { PeerPool } from '$lib/rtc/peerPool';
 import { Signaler } from '$lib/rtc/signaler';
 import type { Serializable } from '$lib/types';
-import { getRandomNumber, getRandomNumberInRange } from '$lib/utils';
+import { getRandomNumberInRange } from '$lib/utils';
 import {
+	AppendEntryMessage,
 	AppendEntryResponse,
 	RequestElectionResponse,
-	type AppendEntryMessage,
+	RequestAppendMessage,
 	type RequestElectionMessage
 } from './message';
-
-type LogObserverType = 'LEADER' | 'FOLLOWER' | 'CANDIDATE';
-type ClusterMemberId = string;
-
-// This is the replicated log
-// make it a  linked list
-export class ObservedLogEntry<T> implements Serializable {
-	entry: T;
-	term: number;
-	index: number;
-	committed: boolean;
-
-	constructor(content: T, index: number, term: number) {
-		this.entry = content;
-		this.term = term;
-		this.index = index;
-		this.committed = false;
-	}
-
-	public commit() {
-		this.committed = true;
-	}
-
-	toString(): string {
-		return `${this.term}:${this.entry}`;
-	}
-
-	toJson(): string {
-		return JSON.stringify({
-			content: this.entry,
-			term: this.term
-		});
-	}
-}
-
-// what I as a log observer think the state of the shared log is
-interface ObservedState {
-	currentTerm: number;
-	leaderId: ClusterMemberId;
-	log: (ObservedLogEntry<string> | null)[]; // TODO type the strings into actual moves
-	idxLastCommitted: number;
-	idxLastApplied: number;
-	peerCount: number; // invariant -> on a leader, this is up to date. Anyways we will start with
-
-	// only present if observer is leader
-	replicationState?: {
-		[serverId: ClusterMemberId]: {
-			idxNextEntryToReplicate: number;
-			idxLastEntryReplicated: number;
-		};
-	};
-}
 
 // events that will be shared with wider world
 interface Event<T> {
@@ -83,16 +32,72 @@ interface NewPeerConnected extends Event<{}> {}
 // peerDisconnected
 interface PeerDisconnected extends Event<{}> {}
 
-const addEventListener = (name: string, event: (event: any) => void) => {};
+type LogObserverType = 'LEADER' | 'FOLLOWER' | 'CANDIDATE';
+type ClusterMemberId = string;
+
+// This is the replicated log
+// make it a  linked list
+export class ObservedLogEntry<T> implements Serializable {
+	entry: T;
+	term: number;
+	acks: number;
+	committed: boolean;
+
+	constructor(content: T, term: number) {
+		this.entry = content;
+		this.term = term;
+		this.acks = 0;
+		this.committed = false;
+	}
+
+	public registerAck() {
+		this.acks += 1;
+	}
+
+	public getAcks() {
+		return this.acks;
+	}
+
+	public commit() {
+		this.committed = true;
+	}
+
+	toString(): string {
+		return `${this.term}:${this.entry}`;
+	}
+
+	toJson(): string {
+		return JSON.stringify({
+			content: this.entry,
+			term: this.term
+		});
+	}
+}
 
 // TODO peerPool and Signaler should have some methods to create them before connecting
 export class LogObserver extends EventTarget {
 	private peerPool?: PeerPool;
 	private signaler?: Signaler;
+
 	private type: LogObserverType;
 	private ownId?: ClusterMemberId;
 	private votedFor?: ClusterMemberId;
-	private observedState: ObservedState;
+
+	private currentTerm: number;
+	private leaderId: ClusterMemberId;
+	private log: (ObservedLogEntry<string> | null)[]; // TODO generify the Observed log entry
+	private idxLastAppended: number;
+	private idxLastApplied: number;
+	private peerCount: number; // invariant -> on a leader, this is up to date.
+
+	// only present if observer is leader
+	private followerState?: {
+		[serverId: ClusterMemberId]: {
+			idxNextEntryToAppend: number;
+			idxLastEntryAppended: number;
+		};
+	};
+
 	private electionIntervalMs: number;
 	private heartbeatIntervalMs: number;
 	private heartbeatInterval?: number;
@@ -102,14 +107,12 @@ export class LogObserver extends EventTarget {
 		super();
 		// initial state
 		this.type = 'FOLLOWER';
-		this.observedState = {
-			currentTerm: 0,
-			leaderId: '',
-			peerCount: 0,
-			log: new Array(100).fill(null),
-			idxLastApplied: 0,
-			idxLastCommitted: 0
-		};
+		this.currentTerm = 0;
+		this.leaderId = '';
+		this.peerCount = 0;
+		this.log = new Array(1000).fill(null);
+		this.idxLastAppended = 0;
+		this.idxLastApplied = 0;
 		this.electionIntervalMs = getRandomNumberInRange(3000, 5000);
 		this.heartbeatIntervalMs = 2000; // must be below election interval, otherwise elections will be triggered.
 
@@ -164,6 +167,11 @@ export class LogObserver extends EventTarget {
 		}
 	}
 
+	public isReady(): boolean {
+		// ready to accept entries if you are not a candidate
+		return this.type !== 'CANDIDATE';
+	}
+
 	private initPeerPool(ownId: ClusterMemberId) {
 		this.ownId = ownId;
 		// TODO probably a way to not have to put `!` to tell TS that we have a signaler
@@ -171,7 +179,7 @@ export class LogObserver extends EventTarget {
 
 		this.peerPool.addEventListener('peerConnected', (event: any) => {
 			console.log(`Peer ${event.detail.peerId} connected`);
-			this.observedState.peerCount += 1;
+			this.state.peerCount += 1;
 
 			const dispatch = new CustomEvent('peerConnected', {
 				detail: {}
@@ -182,7 +190,7 @@ export class LogObserver extends EventTarget {
 
 		this.peerPool.addEventListener('peerDisconnected', (event: any) => {
 			console.log(`Peer ${event.detail.peerId} disconnected`);
-			this.observedState.peerCount -= 1;
+			this.state.peerCount -= 1;
 
 			const dispatch = new CustomEvent('peerDisconnected', { detail: {} });
 			this.dispatchEvent(dispatch);
@@ -194,69 +202,139 @@ export class LogObserver extends EventTarget {
 		});
 	}
 
-	// Deserialize and route message
+	// Deserialize and route message to correct processor
 	private processIncomingMessage(fromPeerId: string, message: string) {}
 
 	// ================= APPEND ENTRY ==================
-	private appendEntry(entry: string) {}
+	public appendEntry(entry: string) {
+		switch (this.type) {
+			case 'LEADER':
+				// append to my log
+				this.log[this.idxLastAppended + 1] = new ObservedLogEntry(entry, this.currentTerm);
+				this.idxLastAppended += 1;
 
-	private handleAppendEntryMessage(fromPeerId: string, message: AppendEntryMessage) {
-		if (message.term < this.observedState.currentTerm) {
-			this.peerPool!.sendMessage(
-				fromPeerId,
-				new AppendEntryResponse(this.observedState.currentTerm, false)
-			);
-			return;
+				// for each follower, send if the index of the next entry to append matches the index that I've just appended
+				for (const followerId of Object.keys(this.followerState!)) {
+					const follower = this.followerState![followerId];
+					if (this.idxLastAppended >= follower.idxNextEntryToAppend) {
+						this.appendToFollowerLog(followerId, follower.idxNextEntryToAppend);
+					}
+				}
+				break;
+			case 'FOLLOWER':
+				// ask leader to append the message
+				const msg = new RequestAppendMessage(entry);
+				this.peerPool!.sendMessage(this.leaderId, msg);
+				break;
+			case 'CANDIDATE':
+				throw new Error('Not ready to accept write requests');
+			default:
+				throw new Error(`Unknown LogObserverType: ${this.type}`);
 		}
+		// const idxEntry = 0;
 
-		const previousEntriesMatch =
-			message.prevLogTerm === this.observedState.log[message.prevLogIndex]?.term;
-
-		if (!previousEntriesMatch) {
-			this.peerPool!.sendMessage(
-				fromPeerId,
-				new AppendEntryResponse(this.observedState.currentTerm, false)
-			);
-			return;
-		}
-
-		const newEntry = message.newLogEntry;
-
-		if (newEntry.entry === '') {
-			// heartbeat message
-			this.resetElectionInterval();
-			return;
-		}
-
-		this.applyLogEntry(
-			message.prevLog.index + 1,
-			message.newLogEntry.entry,
-			message.leaderCommitIndex
-		);
-
-		this.peerPool!.sendMessage(
-			fromPeerId,
-			new AppendEntryResponse(this.observedState.currentTerm, true)
-		);
+		// as a follower, ask leader to append
 	}
 
-	private handleAppendEntryResponse(fromPeerId: string, message: AppendEntryResponse) {}
+	private handleAppendEntryMessage(fromPeerId: string, message: AppendEntryMessage) {}
+
+	private handleAppendEntryResponse(fromPeerId: string, message: AppendEntryResponse) {
+		if (message.term > this.currentTerm) {
+			// the cluster has moved on, I should be a follower.
+			this.currentTerm = message.term;
+			this.convertToFollower();
+			return;
+		}
+
+		if (message.term < this.currentTerm) {
+			// ignore message, the inconsistent follower will eventually catch up
+			// the next heartbeat from the leader should tell them what term we are on
+			return;
+		}
+
+		if (!(this.type === 'LEADER')) {
+			// for some reason, I am no longer the lead, so I don't care about your message
+			console.error(
+				`Got an appendEntryResponse but node is no longer the leader. From peer id: ${fromPeerId}; message: ${message}`
+			);
+			return;
+		}
+
+		const followerState = this.followerState![fromPeerId];
+
+		if (message.success) {
+			// log entry successfully appended to the log of the follower
+			// At this point, the idxNextEntryToAppend currently points to the entry that was *just* appended in the follower log
+			const idxEntry = followerState.idxNextEntryToAppend;
+
+			/*
+				Bookkeeping for the log entry should be done:
+				- Increment the number of acknowledgments (acks).
+				- If the entry is not yet committed and the number of acks exceeds the quorum size:
+					- Commit the entry.
+					- Dispatch a message with the committed entry.
+				- Update the last committed entry index.
+			*/
+
+			const entry = this.log[idxEntry]!;
+			entry.acks += 1;
+
+			if (!entry.committed && entry.acks >= this.getQuorumSize()) {
+				entry.commit();
+				this.idxLastApplied = idxEntry;
+
+				const dispatch = new CustomEvent('newLogEntry', {
+					detail: {
+						entry: entry.entry
+					}
+				});
+
+				this.dispatchEvent(dispatch);
+			}
+
+			/*
+				Follower bookkeeping should now be done:
+				- follower.idxLastEntryAppended should be set to idxEntry.
+				- follower.idxNextEntryToAppend should be incremented.
+			*/
+
+			followerState.idxLastEntryAppended = idxEntry;
+			followerState.idxNextEntryToAppend += 1;
+
+			/*
+				After incrementing, check if the follower is behind the latest appended entry.
+				If so, send the next entry.
+			*/
+			if (this.idxLastAppended >= followerState.idxNextEntryToAppend) {
+				this.appendToFollowerLog(fromPeerId, followerState.idxNextEntryToAppend);
+			}
+		} else {
+			/* 
+				Log inconsistency, catch up the peer
+				- Find the first divergent index by decrementing followerState.idxLastEntryToAppend
+				- And sending the message
+			*/
+
+			followerState.idxNextEntryToAppend -= 1;
+			this.appendToFollowerLog(fromPeerId, followerState.idxNextEntryToAppend);
+		}
+	}
 
 	// ================= REQUEST ELECTION ==================
-	private requestElection() {}
+	// private requestElection() {}
 
 	private handleRequestElectionMessage(fromPeerId: string, message: RequestElectionMessage) {
-		const termIsGreaterThanOrEqual = message.term < this.observedState.currentTerm;
+		const termIsGreaterThanOrEqual = message.term < this.state.currentTerm;
 
 		const isLogUpToDate =
-			message.lastLogEntryMetadata.term === this.observedState.currentTerm &&
-			message.lastLogEntryMetadata.index === this.observedState.idxLastApplied;
+			message.lastLogEntryMetadata.term === this.state.currentTerm &&
+			message.lastLogEntryMetadata.index === this.state.idxLastAppended;
 
 		const voteGranted = this.votedFor === undefined && termIsGreaterThanOrEqual && isLogUpToDate;
 
 		this.peerPool!.sendMessage(
 			fromPeerId,
-			new RequestElectionResponse(this.observedState.currentTerm, voteGranted)
+			new RequestElectionResponse(this.state.currentTerm, voteGranted)
 		);
 
 		this.votedFor = fromPeerId;
@@ -264,39 +342,7 @@ export class LogObserver extends EventTarget {
 
 	private handleRequestElectionResponse(fromPeerId: string, message: RequestElectionResponse) {}
 
-	private applyLogEntry(entry: string, index: number, leaderCommitIndex: number) {
-		// what do I know here?
-
-		const newLogEntry = new ObservedLogEntry(entry, this.observedState.currentTerm);
-
-		if (this.observedState.log[index] !== null) {
-			// an entry is already present on my node
-			// overwrite it and delete all entries that follow
-			this.observedState.log[index] = newLogEntry;
-			const ptr = index + 1;
-
-			while (this.observedState.log[ptr] != null) {
-				this.observedState.log[ptr] = null;
-			}
-		} else {
-			// just add it
-			this.observedState.log[index] = newLogEntry;
-		}
-
-		this.observedState.idxLastCommitted = index;
-		// TODO -> understand why?
-		this.observedState.idxLastCommitted = Math.min(leaderCommitIndex, index);
-
-		// Only dispatch when an entry is committed
-		const dispatch = new CustomEvent('newLogEntry', {
-			detail: {
-				entry: entry
-			}
-		});
-
-		this.dispatchEvent(dispatch);
-	}
-
+	// ================= PRIVATE METHODS ==================
 	private resetElectionInterval() {
 		if (this.electionInterval) {
 			clearInterval(this.electionInterval);
@@ -306,10 +352,34 @@ export class LogObserver extends EventTarget {
 			console.log('No heartbeat detected, triggering election');
 			// Convert to candidate
 			this.type = 'CANDIDATE';
-			this.observedState.replicationState = undefined; // clear if it was set
+			this.state.replicationState = undefined; // clear if it was set
 
 			// request election
 			this.requestElection();
 		}, this.electionIntervalMs);
+	}
+
+	private convertToFollower() {
+		this.type = 'FOLLOWER';
+		this.followerState = undefined;
+		this.resetElectionInterval(); // restart election interval
+		// wait for a heartbet to set the new leader id
+	}
+
+	private appendToFollowerLog(followerId: ClusterMemberId, entryIndex: number) {
+		const msg = new AppendEntryMessage(
+			this.currentTerm,
+			this.ownId!,
+			entryIndex - 1, // previous index. At minimum 0 since the first entry is at 1.
+			this.log[entryIndex - 1]!.term ?? this.currentTerm, // current term if the previous entry is null, only happens when we are adding the first entry
+			this.log[entryIndex]!.entry,
+			this.idxLastApplied
+		);
+
+		this.peerPool!.sendMessage(followerId, msg);
+	}
+
+	private getQuorumSize() {
+		return Math.floor(this.getPeerCount() / 2) + 1;
 	}
 }
