@@ -320,6 +320,11 @@ export class LogObserver extends EventTarget {
 		}
 	}
 
+	private handleRequestAppendMessage(fromPeerId: string, message: RequestAppendMessage) {
+		// this is client request to add a message to the shared log
+		this.appendEntry(message.msg);
+	}
+
 	// ================= REQUEST ELECTION ==================
 	// private requestElection() {}
 
