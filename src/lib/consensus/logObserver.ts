@@ -87,8 +87,9 @@ export class LogObserver extends EventTarget {
 	private currentTerm: number;
 	private leaderId: ClusterMemberId;
 	private log: (ObservedLogEntry<string> | null)[]; // TODO generify the Observed log entry
-	private idxLastAppended: number;
-	private idxLastApplied: number;
+	private idxLastReplicated: number; // the highest log entry known to be replicated on a quorum of machines
+	private idxLastApplied: number; // the highest log entry that was applied to the state machine (in our case, dispatched to the component)
+
 	private peerCount: number; // invariant -> on a leader, this is up to date.
 
 	// only present if observer is leader
@@ -112,12 +113,13 @@ export class LogObserver extends EventTarget {
 		this.currentTerm = 0;
 		this.leaderId = '';
 		this.peerCount = 0;
-		this.log = new Array(1000).fill(null);
-		this.idxLastAppended = 0;
+		this.log = [null]; // start with one null entry. The first proper entry will be at index 1.
+		this.idxLastReplicated = 0;
 		this.idxLastApplied = 0;
 		this.electionTimeoutMs = getRandomNumberInRange(3000, 5000);
 		this.heartbeatIntervalMs = 2000; // must be below election interval, otherwise elections will be triggered.
 
+		// TODO workout when to start triggering this.
 		this.resetElectionTimeout();
 	}
 
@@ -274,13 +276,14 @@ export class LogObserver extends EventTarget {
 		switch (this.type) {
 			case 'LEADER':
 				// append to my log
-				this.log[this.idxLastAppended + 1] = new ObservedLogEntry(entry, this.currentTerm);
-				this.idxLastAppended += 1;
+				const newEntry = new ObservedLogEntry(entry, this.currentTerm);
+				this.log.push(newEntry);
 
 				// for each follower, send if the index of the next entry to append matches the index that I've just appended
 				for (const followerId of Object.keys(this.followerState!)) {
 					const follower = this.followerState![followerId];
-					if (this.idxLastAppended >= follower.idxNextEntryToAppend) {
+
+					if (this.log.length - 1 === follower.idxNextEntryToAppend) {
 						this.appendToFollowerLog(followerId, follower.idxNextEntryToAppend);
 					}
 				}
@@ -295,17 +298,99 @@ export class LogObserver extends EventTarget {
 			default:
 				throw new Error(`Unknown LogObserverType: ${this.type}`);
 		}
-
-		// as a follower, ask leader to append
 	}
 
-	private handleAppendEntryMessage(fromPeerId: string, message: AppendEntryMessage) {}
+	private handleAppendEntryMessage(fromPeerId: string, message: AppendEntryMessage) {
+		// check the term, if I am on an older term, update and transition to follower
+		if (message.term > this.currentTerm) {
+			// the cluster has moved on, I should be a follower.
+			this.currentTerm = message.term;
+			this.transitionTo('FOLLOWER');
+			this.leaderId = message.leaderId;
+			return;
+		}
+
+		if (message.term < this.currentTerm) {
+			// ignore message, received from an older leader
+			return;
+		}
+
+		switch (this.type) {
+			case 'CANDIDATE':
+				this.transitionTo('FOLLOWER');
+				this.leaderId = message.leaderId;
+				break;
+			case 'LEADER':
+				// split brain scenario
+				throw new Error(
+					`Current node with id ${this.ownId} is a leader but received an AppendEntryMessage from another leader with id ${fromPeerId}. This indicates a split-brain scenario.`
+				);
+		}
+
+		// here I am a follower of the current leader
+		// first I need to check if the previousLogEntry in the message matches mine
+		const prevLogEntry = this.log[message.prevLogIndex];
+
+		if (prevLogEntry?.term != message.prevLogTerm) {
+			// divergent log histories
+			const msg = new AppendEntryResponse(this.currentTerm, false);
+			this.peerPool?.sendMessage(this.leaderId, msg);
+			return;
+		}
+
+		if (message.newLogEntry === null) {
+			// heartbeat
+			this.resetElectionTimeout();
+			return;
+		}
+
+		const newEntry = new ObservedLogEntry(message.newLogEntry, this.currentTerm);
+		const idxNewEntry = message.prevLogIndex + 1;
+
+		/* 
+			Two cases here 
+				- Append: this entry is new, so it's index will be outside my bounds
+				- Overwrite: my logs have diverged, and so I am overwriting an older entry
+		*/
+		if (idxNewEntry >= this.log.length) {
+			// appending
+			this.log.push(newEntry);
+		} else {
+			// overwriting
+			this.log[idxNewEntry] = newEntry;
+		}
+
+		this.idxLastReplicated = Math.min(idxNewEntry, message.leaderLastReplicatedIndex);
+
+		while (this.idxLastApplied !== this.idxLastReplicated) {
+			const idxToApply = this.idxLastApplied + 1;
+			const entry = this.log[idxToApply]!;
+
+			if (!entry.committed) {
+				entry.commit();
+
+				// TODO make a private method for this
+				const dispatch = new CustomEvent('newLogEntry', {
+					detail: {
+						entry: entry.entry
+					}
+				});
+
+				this.dispatchEvent(dispatch);
+			}
+
+			this.idxLastApplied += 1;
+		}
+
+		const msg = new AppendEntryResponse(this.currentTerm, true);
+		this.peerPool?.sendMessage(this.leaderId, msg);
+	}
 
 	private handleAppendEntryResponse(fromPeerId: string, message: AppendEntryResponse) {
 		if (message.term > this.currentTerm) {
 			// the cluster has moved on, I should be a follower.
 			this.currentTerm = message.term;
-			this.convertToFollower();
+			this.transitionTo('FOLLOWER');
 			return;
 		}
 
@@ -338,13 +423,12 @@ export class LogObserver extends EventTarget {
 					- Dispatch a message with the committed entry.
 				- Update the last committed entry index.
 			*/
-
 			const entry = this.log[idxEntry]!;
 			entry.acks += 1;
 
 			if (!entry.committed && entry.acks >= this.getQuorumSize()) {
 				entry.commit();
-				this.idxLastApplied = idxEntry;
+				this.idxLastReplicated = idxEntry;
 
 				const dispatch = new CustomEvent('newLogEntry', {
 					detail: {
@@ -353,6 +437,8 @@ export class LogObserver extends EventTarget {
 				});
 
 				this.dispatchEvent(dispatch);
+				// dispatching the message is equivalent to applying the entry to the state machine
+				this.idxLastApplied = idxEntry;
 			}
 
 			/*
@@ -365,10 +451,10 @@ export class LogObserver extends EventTarget {
 			followerState.idxNextEntryToAppend += 1;
 
 			/*
-				After incrementing, check if the follower is behind the latest appended entry.
+				After incrementing, check if the follower is behind the last appended entry.
 				If so, send the next entry.
 			*/
-			if (this.idxLastAppended >= followerState.idxNextEntryToAppend) {
+			if (this.log.length - 1 >= followerState.idxNextEntryToAppend) {
 				this.appendToFollowerLog(fromPeerId, followerState.idxNextEntryToAppend);
 			}
 		} else {
@@ -411,14 +497,15 @@ export class LogObserver extends EventTarget {
 	private handleRequestElectionResponse(fromPeerId: string, message: RequestElectionResponse) {}
 
 	// ================= PRIVATE METHODS ==================
-	private transition(fromType: LogObserverType, toType: LogObserverType) {}
-
-	// use the transition method instead
-	private convertToFollower() {
+	private transitionTo(type: LogObserverType) {
+		// cases
+		// I am already at that type
+		// any -> LEADER
+		// any -> CANDIDATE
+		// any -> FOLLOWER
 		this.type = 'FOLLOWER';
 		this.followerState = undefined;
 		this.resetElectionTimeout(); // restart election interval
-		// wait for a heartbet to set the new leader id
 	}
 
 	private requestElection() {

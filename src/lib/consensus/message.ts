@@ -9,14 +9,14 @@ export class AppendEntryMessage implements Serializable {
 		public prevLogIndex: number,
 		public prevLogTerm: number | null,
 		public newLogEntry: string | null,
-		public leaderCommitIndex: number
+		public leaderLastReplicatedIndex: number
 	) {
 		this.term = term;
 		this.leaderId = leaderId;
 		this.prevLogIndex = prevLogIndex;
 		this.prevLogTerm = prevLogTerm;
 		this.newLogEntry = newLogEntry;
-		this.leaderCommitIndex = leaderCommitIndex;
+		this.leaderLastReplicatedIndex = leaderLastReplicatedIndex;
 	}
 
 	toJson(): string {
@@ -26,8 +26,8 @@ export class AppendEntryMessage implements Serializable {
 			leaderId: this.leaderId,
 			prevLogIndex: this.prevLogIndex,
 			prevLogTerm: this.prevLogTerm,
-			newLogEntries: this.newLogEntry,
-			leaderCommitIndex: this.leaderCommitIndex
+			newLogEntry: this.newLogEntry,
+			leaderCommitIndex: this.leaderLastReplicatedIndex
 		});
 	}
 }
