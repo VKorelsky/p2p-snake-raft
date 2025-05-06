@@ -55,15 +55,23 @@ export class RequestElectionMessage implements Serializable {
 	constructor(
 		public term: number,
 		public candidateId: string,
-		public lastLogEntryMetadata: { index: number; term: number }
+		public prevLogIndex: number,
+		public prevLogTerm: number
 	) {
 		this.term = term;
 		this.candidateId = candidateId;
-		this.lastLogEntryMetadata = lastLogEntryMetadata;
+		this.prevLogIndex = prevLogIndex;
+		this.prevLogTerm = prevLogTerm;
 	}
 
 	toJson(): string {
-		return JSON.stringify({ type: 'RequestElectionMessage' });
+		return JSON.stringify({
+			type: 'RequestElectionMessage',
+			term: this.term,
+			candidateId: this.candidateId,
+			prevLogIndex: this.prevLogIndex,
+			prevLogTerm: this.prevLogTerm
+		});
 	}
 }
 
@@ -78,7 +86,7 @@ export class RequestElectionResponse implements Serializable {
 
 	toJson(): string {
 		return JSON.stringify({
-			type: 'AppendEntryResponse',
+			type: 'RequestElectionResponse',
 			term: this.term,
 			voteGranted: this.voteGranted
 		});
@@ -102,7 +110,7 @@ export class RequestAppendMessage implements Serializable {
 
 	toJson(): string {
 		return JSON.stringify({
-			type: 'WriteMessage',
+			type: 'RequestAppendMessage',
 			msg: this.msg
 		});
 	}

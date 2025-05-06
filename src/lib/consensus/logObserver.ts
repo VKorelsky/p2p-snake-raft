@@ -2,12 +2,13 @@ import { PeerPool } from '$lib/rtc/peerPool';
 import { Signaler } from '$lib/rtc/signaler';
 import type { Serializable } from '$lib/types';
 import { getRandomNumberInRange } from '$lib/utils';
+import { parse } from 'svelte/compiler';
 import {
 	AppendEntryMessage,
 	AppendEntryResponse,
+	RequestElectionMessage,
 	RequestElectionResponse,
-	RequestAppendMessage,
-	type RequestElectionMessage
+	RequestAppendMessage
 } from './message';
 
 // events that will be shared with wider world
@@ -204,7 +205,69 @@ export class LogObserver extends EventTarget {
 	}
 
 	// Deserialize and route message to correct processor
-	private processIncomingMessage(fromPeerId: string, message: string) {}
+	private processIncomingMessage(fromPeerId: string, message: string) {
+		try {
+			const parsedMessage = JSON.parse(message);
+			const messageType = parsedMessage.type;
+
+			switch (messageType) {
+				case 'AppendEntryRequest':
+					const appendEntryMsg = new AppendEntryMessage(
+						parsedMessage.term,
+						parsedMessage.leaderId,
+						parsedMessage.prevLogIndex,
+						parsedMessage.prevLogTerm,
+						parsedMessage.newLogEntries,
+						parsedMessage.leaderCommitIndex
+					);
+					this.handleAppendEntryMessage(fromPeerId, appendEntryMsg);
+					break;
+
+				case 'AppendEntryResponse':
+					const appendEntryResponse = new AppendEntryResponse(
+						parsedMessage.term,
+						parsedMessage.success
+					);
+
+					this.handleAppendEntryResponse(fromPeerId, appendEntryResponse);
+					break;
+
+				case 'RequestElectionMessage':
+					const requestElectionMsg = new RequestElectionMessage(
+						parsedMessage.term,
+						parsedMessage.candidateId,
+						parsedMessage.prevLogIndex,
+						parsedMessage.prevLogTerm
+					);
+					this.handleRequestElectionMessage(fromPeerId, requestElectionMsg);
+					break;
+
+				case 'RequestElectionResponse':
+					const requestElectionResponse = new RequestElectionResponse(
+						parsedMessage.term,
+						parsedMessage.voteGranted
+					);
+					this.handleRequestElectionResponse(fromPeerId, requestElectionResponse);
+					break;
+
+				case 'RequestAppendMessage':
+					const requestAppendMsg = new RequestAppendMessage(parsedMessage.msg);
+					this.handleRequestAppendMessage(fromPeerId, requestAppendMsg);
+					break;
+
+				case 'RequestSnapshotMessage':
+					// TBD
+					console.log('RequestSnapshotMessage received but not implemented');
+					break;
+
+				default:
+					console.error(`Unknown message type: ${messageType}`, parsedMessage);
+			}
+		} catch (error) {
+			console.error('Error processing message:', error);
+			console.error('Original message:', message);
+		}
+	}
 
 	// ================= APPEND ENTRY ==================
 	public appendEntry(entry: string) {
@@ -348,6 +411,16 @@ export class LogObserver extends EventTarget {
 	private handleRequestElectionResponse(fromPeerId: string, message: RequestElectionResponse) {}
 
 	// ================= PRIVATE METHODS ==================
+	private transition(fromType: LogObserverType, toType: LogObserverType) {}
+
+	// use the transition method instead
+	private convertToFollower() {
+		this.type = 'FOLLOWER';
+		this.followerState = undefined;
+		this.resetElectionTimeout(); // restart election interval
+		// wait for a heartbet to set the new leader id
+	}
+
 	private requestElection() {
 		// TODO
 	}
@@ -394,16 +467,6 @@ export class LogObserver extends EventTarget {
 			console.log('Sending heartbeat to followers');
 			this.sendHeartbeat();
 		}, this.heartbeatIntervalMs);
-	}
-
-	private transition(fromType: LogObserverType, toType: LogObserverType) {}
-
-	// use the transition method instead
-	private convertToFollower() {
-		this.type = 'FOLLOWER';
-		this.followerState = undefined;
-		this.resetElectionTimeout(); // restart election interval
-		// wait for a heartbet to set the new leader id
 	}
 
 	private appendToFollowerLog(followerId: ClusterMemberId, entryIndex: number) {

@@ -8,3 +8,4 @@
 
 Algo related 
 - Optimize by sending batches of event instead of one event at a time
+- Add console.log to all of the behaviour so we can keep track of what is going on
