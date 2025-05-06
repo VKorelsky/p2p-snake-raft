@@ -95,13 +95,14 @@ export class LogObserver extends EventTarget {
 		[serverId: ClusterMemberId]: {
 			idxNextEntryToAppend: number;
 			idxLastEntryAppended: number;
+			lastAppendMessageTimestamp: number;
 		};
 	};
 
-	private electionIntervalMs: number;
+	private electionTimeoutMs: number;
 	private heartbeatIntervalMs: number;
 	private heartbeatInterval?: number;
-	private electionInterval?: number;
+	private electionTimeout?: number;
 
 	public constructor() {
 		super();
@@ -113,10 +114,10 @@ export class LogObserver extends EventTarget {
 		this.log = new Array(1000).fill(null);
 		this.idxLastAppended = 0;
 		this.idxLastApplied = 0;
-		this.electionIntervalMs = getRandomNumberInRange(3000, 5000);
+		this.electionTimeoutMs = getRandomNumberInRange(3000, 5000);
 		this.heartbeatIntervalMs = 2000; // must be below election interval, otherwise elections will be triggered.
 
-		this.resetElectionInterval();
+		this.resetElectionTimeout();
 	}
 
 	public startObserving(): void {
@@ -231,7 +232,6 @@ export class LogObserver extends EventTarget {
 			default:
 				throw new Error(`Unknown LogObserverType: ${this.type}`);
 		}
-		// const idxEntry = 0;
 
 		// as a follower, ask leader to append
 	}
@@ -348,36 +348,79 @@ export class LogObserver extends EventTarget {
 	private handleRequestElectionResponse(fromPeerId: string, message: RequestElectionResponse) {}
 
 	// ================= PRIVATE METHODS ==================
-	private resetElectionInterval() {
-		if (this.electionInterval) {
-			clearInterval(this.electionInterval);
-		}
-
-		this.electionInterval = setInterval(() => {
-			console.log('No heartbeat detected, triggering election');
-			// Convert to candidate
-			this.type = 'CANDIDATE';
-			this.state.replicationState = undefined; // clear if it was set
-
-			// request election
-			this.requestElection();
-		}, this.electionIntervalMs);
+	private requestElection() {
+		// TODO
 	}
 
+	private resetElectionTimeout() {
+		clearTimeout(this.electionTimeout);
+
+		this.electionTimeout = setTimeout(() => {
+			console.log('No heartbeat detected, triggering election');
+			this.requestElection();
+		}, this.electionTimeoutMs);
+	}
+
+	private sendHeartbeat() {
+		for (const followerId of Object.keys(this.followerState!)) {
+			const follower = this.followerState![followerId];
+			const timeSinceLastAppendMsg = performance.now() - follower.lastAppendMessageTimestamp;
+
+			if (timeSinceLastAppendMsg < this.heartbeatIntervalMs) {
+				continue;
+			}
+
+			const prevIndex = follower.idxNextEntryToAppend - 1;
+			const prevEntry = this.log[prevIndex];
+			const prevTerm = prevEntry === null ? null : prevEntry.term;
+
+			const msg = new AppendEntryMessage(
+				this.currentTerm,
+				this.ownId!,
+				prevIndex,
+				prevTerm,
+				null,
+				this.idxLastApplied
+			);
+
+			this.peerPool!.sendMessage(followerId, msg);
+		}
+	}
+
+	private setLeaderHeartbeatInterval() {
+		clearInterval(this.heartbeatInterval);
+
+		this.heartbeatInterval = setInterval(() => {
+			console.log('Sending heartbeat to followers');
+			this.sendHeartbeat();
+		}, this.heartbeatIntervalMs);
+	}
+
+	private transition(fromType: LogObserverType, toType: LogObserverType) {}
+
+	// use the transition method instead
 	private convertToFollower() {
 		this.type = 'FOLLOWER';
 		this.followerState = undefined;
-		this.resetElectionInterval(); // restart election interval
+		this.resetElectionTimeout(); // restart election interval
 		// wait for a heartbet to set the new leader id
 	}
 
 	private appendToFollowerLog(followerId: ClusterMemberId, entryIndex: number) {
+		this.followerState![followerId].lastAppendMessageTimestamp = performance.now();
+
+		const currentEntry = this.log[entryIndex]!.entry;
+
+		const prevIndex = entryIndex - 1;
+		const prevEntry = this.log[prevIndex];
+		const prevTerm = prevEntry === null ? null : prevEntry.term;
+
 		const msg = new AppendEntryMessage(
 			this.currentTerm,
 			this.ownId!,
-			entryIndex - 1, // previous index. At minimum 0 since the first entry is at 1.
-			this.log[entryIndex - 1]!.term ?? this.currentTerm, // current term if the previous entry is null, only happens when we are adding the first entry
-			this.log[entryIndex]!.entry,
+			prevIndex,
+			prevTerm,
+			currentEntry,
 			this.idxLastApplied
 		);
 
