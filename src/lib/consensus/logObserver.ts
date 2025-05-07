@@ -424,10 +424,18 @@ export class LogObserver extends EventTarget {
 
 		const followerState = this.followerState[fromPeerId];
 
+		
+		// In the case of a heartbeat, the follower is going to be up to date
+		// this means that the index of the entry will be equal to the last entry in the leader log 
 		if (message.success) {
 			// log entry successfully appended to the log of the follower
 			// At this point, the idxNextEntryToAppend currently points to the entry that was *just* appended in the follower log
 			const idxEntry = followerState.idxNextEntryToAppend;
+
+			if (idxEntry === this.log.length) {
+				// we are getting a response to an empty heartbeat, so no need to update anything
+				return;
+			}
 
 			/*
 				Bookkeeping for the log entry should be done:
@@ -438,14 +446,18 @@ export class LogObserver extends EventTarget {
 				- Update the last committed entry index.
 			*/
 			const entry = this.log[idxEntry]!;
-			entry.acks += 1;
-
-			if (!entry.committed && entry.acks >= this.getQuorumSize()) {
-				entry.commit();
-				this.idxLastReplicated = idxEntry;
-				this.applyEntry(entry.entry);
-				// dispatching the message is equivalent to applying the entry to the state machine
-				this.idxLastApplied = idxEntry;
+			
+			// the first entry in the log is null
+			if (entry) {
+				entry.acks += 1;
+	
+				if (!entry.committed && entry.acks >= this.getQuorumSize()) {
+					entry.commit();
+					this.idxLastReplicated = idxEntry;
+					this.applyEntry(entry.entry);
+					// dispatching the message is equivalent to applying the entry to the state machine
+					this.idxLastApplied = idxEntry;
+				}
 			}
 
 			/*
@@ -453,7 +465,6 @@ export class LogObserver extends EventTarget {
 				- follower.idxLastEntryAppended should be set to idxEntry.
 				- follower.idxNextEntryToAppend should be incremented.
 			*/
-
 			followerState.idxLastEntryAppended = idxEntry;
 			followerState.idxNextEntryToAppend += 1;
 
@@ -587,7 +598,7 @@ export class LogObserver extends EventTarget {
 					);
 
 					this.followerState[peer] = {
-						idxNextEntryToAppend: this.log.length - 1,
+						idxNextEntryToAppend: this.log.length, // initialized to leader last log index + 1
 						idxLastEntryAppended: 0,
 						lastAppendMessageTimestamp: 0
 					};
@@ -597,7 +608,7 @@ export class LogObserver extends EventTarget {
 					const lastEntry = this.getLastLogEntry();
 					const lastEntryTerm = lastEntry ? lastEntry.term : this.currentTerm;
 
-					this.sendHeartbeat(peer, this.log.length - 1, lastEntryTerm);
+					this.sendHeartbeat(peer, this.log.length, lastEntryTerm);
 				});
 				this.setLeaderHeartbeatInterval();
 				break;
@@ -668,9 +679,11 @@ export class LogObserver extends EventTarget {
 			const follower = this.followerState[followerId];
 			const timeSinceLastAppendMsg = performance.now() - follower.lastAppendMessageTimestamp;
 
-			if (timeSinceLastAppendMsg < this.heartbeatIntervalMs) {
+			if (timeSinceLastAppendMsg >= this.heartbeatIntervalMs) {
 				continue;
 			}
+
+			// if follower is not up to date, the heartbeat will behave like a retry
 
 			const prevIndex = follower.idxNextEntryToAppend - 1;
 			const prevEntry = this.log[prevIndex];

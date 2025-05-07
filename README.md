@@ -12,6 +12,7 @@
 - Iterator over peer pool so that I can ping each peer separatel
 
 CHECKPOINT 07/05
+
 - Try it and debug everything that comes up
 
 SIGNALER
@@ -29,13 +30,19 @@ LOG OBSERVER
   - Send batches of event instead of one event at a time
 - Observability
   - Add console.log to all of the behaviour so we can keep track of what is going on
-  - Currently dispatching the observable state changes a little bit randomly 
+  - Currently dispatching the observable state changes a little bit randomly
 - Cluster membership changes
   - Handle peers joining and leaving
   - Handle own node leaving (as a leader candidate etc etc)
 - Review
   - Peer counting. In some places am using the newer getOpenPeer method, in others I am not
+- Heartbeats
+  - Review logic for heartbeats. How does the leader know that they are getting a reply to their heartbeat? A thought -> if follower is up to date, what is true for their follower state? If a follower is not when we send a heartbeat, what does that mean for the heartbeat, should that behave like a retry?
+- AppendRPC response
+  - If a follower receives two appendMessageRPC, then replies twice, what then? Will we ack twice and update the state of this follower twice?
 
 Optimizations
+
+- A lot of problems would be solved if the first entry in my log was hardcoded
 
 - Instead of JSON messages, send binary RPCs (protobuf etc)
