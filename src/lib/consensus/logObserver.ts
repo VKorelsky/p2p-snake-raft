@@ -114,6 +114,14 @@ export class LogObserver extends EventTarget {
 		// TODO remove the hardcoded roomID
 		this.signaler = new Signaler('697d8c94-cee3-4a99-a3b6-b7cced7927fc');
 
+		this.signaler.onReady(() => {
+			this.signaler.onConnect((sessionIdentifier) => (this.ownId = sessionIdentifier));
+			this.signaler.onConnectError((err) => console.error(err));
+			this.signaler.onDisconnect((reason) =>
+				console.log(`Disconnected from socket. Reason provided is ${reason}`)
+			);
+		});
+
 		// PEER POOL
 		this.peerPool = new PeerPool(this.signaler);
 		this.peerPool.addEventListener('peerConnected', (event: any) => {
@@ -169,12 +177,6 @@ export class LogObserver extends EventTarget {
 
 	public connect() {
 		this.signaler.connect();
-		
-		this.signaler.onConnect((sessionIdentifier) => (this.ownId = sessionIdentifier));
-		this.signaler.onConnectError((err) => console.error(err));
-		this.signaler.onDisconnect((reason) =>
-			console.log(`Disconnected from socket. Reason provided is ${reason}`)
-		);
 	}
 
 	/*
@@ -470,7 +472,7 @@ export class LogObserver extends EventTarget {
 
 	// ================= REQUEST ELECTION ==================
 	private requestElection() {
-		console.log("[OBSERVER] Requesting election")
+		console.log('[OBSERVER] Requesting election');
 		this.currentTerm += 1;
 		this.votedFor = this.ownId!;
 		this.nbVotes = 1;

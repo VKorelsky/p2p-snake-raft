@@ -5,7 +5,30 @@
 	import { onDestroy, onMount } from 'svelte';
 	import Snake from '../../../components/Snake.svelte';
 
-	let logObserver: LogObserver | undefined = $state();
+	const initLogObserver = (): LogObserver => {
+		const observer = new LogObserver();
+
+		observer.addEventListener('ready', () => {
+			clusterReady = true;
+		});
+
+		observer.addEventListener('observerStateChange', (event: any) => {
+			// fired upon new term, new transition of state
+			term = event.term;
+			observerType = event.newType;
+		});
+
+		observer.addEventListener('peerConnected', () => (connectedPeerCount += 1));
+		observer.addEventListener('peerDisconnected', () => (connectedPeerCount -= 1));
+
+		observer.addEventListener('newLogEntry', (event: any) => {
+			processNewMove(event.detail!.entry);
+		});
+
+		return observer;
+	};
+
+	let logObserver: LogObserver = $state(initLogObserver());
 	let connectedPeerCount: number = $state(0);
 	let clusterReady: boolean = $state(false);
 	let observerType: string = $state('');
@@ -18,31 +41,11 @@
 	let autoPlayStartTime: Date | undefined = $state();
 
 	const connect = () => {
-		logObserver = new LogObserver();
-
-		logObserver.addEventListener('ready', () => {
-			clusterReady = true;
-		});
-
-		logObserver.addEventListener('observerStateChange', (event: any) => {
-			// fired upon new term, new transition of state
-			term = event.term;
-			observerType = event.newType;
-		});
-
-		logObserver.addEventListener('peerConnected', () => (connectedPeerCount += 1));
-		logObserver.addEventListener('peerDisconnected', () => (connectedPeerCount -= 1));
-
-		logObserver.addEventListener('newLogEntry', (event: any) => {
-			processNewMove(event.detail!.entry);
-		});
-
-		// todo probably should have some event to indicate that I am succesfully connected instead of blindly assuming
 		logObserver.connect();
 	};
 
 	const disconnect = () => {
-		logObserver?.leave();
+		logObserver.leave();
 	};
 
 	onMount(() => {
@@ -89,8 +92,8 @@
 	// the only messages I can now send are Game commands
 	const playMove = (move: Move) => {
 		snakeMoves.push(move);
-		if (logObserver) {
-			logObserver.appendEntry(move);
+		if (observer) {
+			observer.appendEntry(move);
 		}
 	};
 </script>

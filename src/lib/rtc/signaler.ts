@@ -36,10 +36,12 @@ export interface ServerToClientEvents {
 export class Signaler extends EventTarget {
 	private circleId: string;
 	private socket?: Socket<ServerToClientEvents, ClientToServerEvents>;
+	private readyCallbacks: (() => void)[];
 
 	public constructor(circleId: string) {
 		super();
 		this.circleId = circleId;
+		this.readyCallbacks = [];
 	}
 
 	public connect() {
@@ -49,6 +51,8 @@ export class Signaler extends EventTarget {
 			// which triggers CORS blocking by the browser for some reason
 			transports: ['websocket']
 		});
+
+		this.readyCallbacks.forEach((cb) => cb());
 	}
 
 	private buildSocketUrl(circleId: string): string {
@@ -73,6 +77,14 @@ export class Signaler extends EventTarget {
 	}
 
 	// ====== SOCKET ADMIN ======
+	/*
+		Not pretty, but this event is fired when the socket is initialized, so that the other events can be registered on it
+		This will disappear once this class extends the eventTarget interface
+	*/
+	public onReady(listener: () => void) {
+		this.readyCallbacks.push(listener);
+	}
+
 	public onConnect(listener: (sessionIdentifier: string) => void) {
 		this.getSocket().on('connect', () => {
 			const sessionIdentifier = this.getSocket().id!; // socket is connected so we have an id available

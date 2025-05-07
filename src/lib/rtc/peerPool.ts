@@ -23,9 +23,12 @@ export class PeerPool extends EventTarget {
 		this.signaler = signaler;
 		this.peers = {};
 
-		this.signaler.onConnect((id) => (this.ownPeerId = id));
-		this.signaler.onNewRoomMember(this.getNewRoomMemberHandler());
-		this.signaler.onNewOffer(this.getNewOfferHandler());
+		this.signaler.onReady(() => {
+			this.signaler.onConnect((id) => (this.ownPeerId = id));
+			this.signaler.onNewRoomMember(this.getNewRoomMemberHandler());
+			this.signaler.onNewOffer(this.getNewOfferHandler());
+		})
+
 	}
 
 	public getConnectedPeerCount(): number {
