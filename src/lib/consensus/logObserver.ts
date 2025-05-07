@@ -166,8 +166,8 @@ export class LogObserver extends EventTarget {
 		this.votedFor = '';
 		this.nbVotes = 0;
 		this.followerState = {};
-		this.electionTimeoutMs = getRandomNumberInRange(150, 300);
-		this.heartbeatIntervalMs = 50; // must be below election interval, otherwise elections will be triggered.
+		this.electionTimeoutMs = getRandomNumberInRange(2000, 30000);
+		this.heartbeatIntervalMs = 1000; // must be below election interval, otherwise elections will be triggered.
 
 		// INITIAL LOG STATE
 		this.log = [null]; // start with one null entry. The first proper entry will be at index 1.
@@ -505,12 +505,13 @@ export class LogObserver extends EventTarget {
 			this.currentTerm = message.term;
 		}
 
-		const lastEntry = this.log[this.log.length - 1]!;
+		const lastEntry = this.log[this.log.length - 1];
+		const lastEntryTerm = lastEntry ? lastEntry.term : this.currentTerm;
 
 		const isCandidateLogUpToDate =
-			(message.termLastLogEntry === lastEntry.term &&
+			(message.termLastLogEntry === lastEntryTerm &&
 				message.idxLastLogEntry >= this.log.length - 1) ||
-			lastEntry.term > message.termLastLogEntry;
+			lastEntryTerm > message.termLastLogEntry;
 
 		const voteCanBeGranted = this.votedFor === '' || this.votedFor === message.candidateId;
 
@@ -576,9 +577,12 @@ export class LogObserver extends EventTarget {
 						lastAppendMessageTimestamp: 0
 					};
 
+					// TODO the last log entry may not be set and this is the cause of much grief since the term is null
+					// should refactor and make this type safe
 					const lastEntry = this.getLastLogEntry();
+					const lastEntryTerm = lastEntry ? lastEntry.term : this.currentTerm;
 
-					this.sendHeartbeat(peer, this.log.length - 1, lastEntry.term);
+					this.sendHeartbeat(peer, this.log.length - 1, lastEntryTerm);
 				}
 
 				this.setLeaderHeartbeatInterval();
@@ -605,6 +609,7 @@ export class LogObserver extends EventTarget {
 	}
 
 	private getLastLogEntry(): ObservedLogEntry<any> {
+		// refactor to use this
 		return this.log[this.log.length - 1]!;
 	}
 
