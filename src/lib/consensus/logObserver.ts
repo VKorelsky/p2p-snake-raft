@@ -579,6 +579,7 @@ export class LogObserver extends EventTarget {
 				this.requestElection();
 				break;
 			case 'LEADER':
+				this.type = 'LEADER';
 				Object.keys(this.peerPool.getOpenPeers()).forEach((peer) => {
 					console.log(
 						`[OBSERVER] Affirming leader status to peer with id: ${peer}`,
