@@ -32,6 +32,9 @@ interface NewPeerConnected extends ObserverEvent<{}> {}
 // peerDisconnected
 interface PeerDisconnected extends ObserverEvent<{}> {}
 
+// clusterReady i.e election triggered
+interface ClusterReady extends ObserverEvent<{}> {}
+
 type LogObserverType = 'LEADER' | 'FOLLOWER' | 'CANDIDATE';
 type ClusterMemberId = string;
 
@@ -126,8 +129,14 @@ export class LogObserver extends EventTarget {
 
 			if (this.nbPeers >= this.minClusterSize) {
 				console.log('[OBSERVER] Minimum cluster size reached. Starting election process.');
+				
+				const clusterReadyEvent: ClusterReady = new CustomEvent('ready', {
+					detail: {}
+				});
+				this.dispatchEvent(clusterReadyEvent);
+
 				this.start();
-			};
+			}
 
 			const dispatch: NewPeerConnected = new CustomEvent('peerConnected', {
 				detail: {}
