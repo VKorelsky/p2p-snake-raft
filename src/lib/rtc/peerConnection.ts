@@ -44,8 +44,6 @@ export class PeerConnection extends EventTarget {
 			this.dataChannel = event.channel as RTCDataChannel;
 
 			this.dataChannel.addEventListener('message', (event: MessageEvent) => {
-				console.log('Received new message event on data channel' + event);
-
 				const newMessageEvent = new CustomEvent('newMessage', {
 					detail: {
 						peerId: this.peerId,
@@ -67,14 +65,9 @@ export class PeerConnection extends EventTarget {
 		const offer = await this.connection.createOffer();
 		await this.connection.setLocalDescription(offer);
 
-		this.dataChannel.addEventListener('open', (event) => {
-			console.log('Channel open event:' + event);
-			console.log('Channel object:' + this.dataChannel);
-		});
+		this.dataChannel.addEventListener('open', (_) => {});
 
 		this.dataChannel.addEventListener('message', (event: MessageEvent) => {
-			console.log('Received new message event on data channel' + event);
-
 			const newMessageEvent = new CustomEvent('newMessage', {
 				detail: {
 					peerId: this.peerId,
@@ -114,7 +107,6 @@ export class PeerConnection extends EventTarget {
 			throw new Error('No data channel open between the peers');
 		}
 
-		console.log('Sending message from ' + this);
 		this.dataChannel.send(message.toString());
 	}
 

@@ -117,16 +117,11 @@ export class LogObserver extends EventTarget {
 		this.signaler.onReady(() => {
 			this.signaler.onConnect((sessionIdentifier) => (this.ownId = sessionIdentifier));
 			this.signaler.onConnectError((err) => console.error(err));
-			this.signaler.onDisconnect((reason) =>
-				console.log(`Disconnected from socket. Reason provided is ${reason}`)
-			);
 		});
 
 		// PEER POOL
 		this.peerPool = new PeerPool(this.signaler);
 		this.peerPool.addEventListener('peerConnected', (event: any) => {
-			console.log(`Peer ${event.detail.peerId} connected`);
-
 			this.nbPeers += 1;
 
 			if (this.nbPeers >= this.minClusterSize) {
@@ -148,14 +143,11 @@ export class LogObserver extends EventTarget {
 		});
 
 		this.peerPool.addEventListener('peerDisconnected', (event: any) => {
-			console.log(`Peer ${event.detail.peerId} disconnected`);
-
 			const dispatch: PeerDisconnected = new CustomEvent('peerDisconnected', { detail: {} });
 			this.dispatchEvent(dispatch);
 		});
 
 		this.peerPool.addEventListener('newMessage', (event: any) => {
-			console.log('New message received:', event.detail);
 			this.processIncomingMessage(event.detail.peerId, event.detail.message);
 		});
 
@@ -188,7 +180,7 @@ export class LogObserver extends EventTarget {
 	}
 
 	public leave(): void {
-		console.log('disconnecting from the signaler...');
+		console.log('[OBSERVER] disconnecting from the signaler...');
 
 		if (!this.signaler) {
 			console.log('Not connected, nothing to disconnect from');
@@ -578,19 +570,18 @@ export class LogObserver extends EventTarget {
 		this.followerState = {};
 		clearInterval(this.heartbeatInterval);
 		this.resetElectionTimeout();
-
+		
+		console.log(`[OBSERVER] Transitioning to ${type}`);
 		switch (type) {
 			case 'CANDIDATE':
 				// Become a candidate and request an election
-				console.log('transitioning to candidate');
 				this.type = 'CANDIDATE';
 				this.requestElection();
 				break;
 			case 'LEADER':
-				console.log('transitioning to leader');
 				Object.keys(this.peerPool.getOpenPeers()).forEach((peer) => {
 					console.log(
-						`Affirming leader status to peer with id: ${peer}`,
+						`[OBSERVER] Affirming leader status to peer with id: ${peer}`,
 						Object.keys(this.peerPool.getOpenPeers())
 					);
 
@@ -610,7 +601,6 @@ export class LogObserver extends EventTarget {
 				this.setLeaderHeartbeatInterval();
 				break;
 			case 'FOLLOWER':
-				console.log('transitioning to follower');
 				this.type = 'FOLLOWER';
 
 				// this is somewhat ugly
@@ -643,7 +633,7 @@ export class LogObserver extends EventTarget {
 		clearTimeout(this.electionTimeout);
 
 		this.electionTimeout = setTimeout(() => {
-			console.log('No heartbeat or acknowledgments detected, triggering election');
+			console.log('[OBSERVER] No heartbeat or acknowledgments detected, triggering election');
 			this.transitionTo('CANDIDATE');
 		}, this.electionTimeoutMs);
 	}
@@ -652,7 +642,7 @@ export class LogObserver extends EventTarget {
 		clearInterval(this.heartbeatInterval);
 
 		this.heartbeatInterval = setInterval(() => {
-			console.log('Sending heartbeat to followers');
+			console.log('[OBSERVER] Sending heartbeat to followers');
 			this.sendHeartbeats();
 		}, this.heartbeatIntervalMs);
 	}

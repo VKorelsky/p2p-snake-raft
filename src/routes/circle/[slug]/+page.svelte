@@ -18,8 +18,6 @@
 		});
 
 		observer.addEventListener('observerStateChange', (event: any) => {
-			// fired upon new term, new transition of state
-			console.log("NODE TYPE TRANSITION EVENT RECEIVED", event)
 			term = event.detail.term;
 			observerType = event.detail.newType;
 		});
