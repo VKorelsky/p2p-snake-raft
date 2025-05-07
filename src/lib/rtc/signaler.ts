@@ -33,13 +33,17 @@ export interface ServerToClientEvents {
 	newIceCandidate: (event: newIceCandidateEvent) => void;
 }
 
-// TODO -> actually implement this
 export class Signaler extends EventTarget {
-	private socket: Socket<ServerToClientEvents, ClientToServerEvents>;
+	private circleId: string;
+	private socket?: Socket<ServerToClientEvents, ClientToServerEvents>;
 
 	public constructor(circleId: string) {
 		super();
-		this.socket = io(this.buildSocketUrl(circleId), {
+		this.circleId = circleId;
+	}
+
+	public connect() {
+		this.socket = io(this.buildSocketUrl(this.circleId), {
 			reconnectionAttempts: 2,
 			// restrict to websockets as when the server restarts, socket io switches to long polling
 			// which triggers CORS blocking by the browser for some reason
@@ -53,35 +57,35 @@ export class Signaler extends EventTarget {
 
 	// ====== CLIENT TO SERVER HANDLERS ====== //
 	public leaveCircle(circleId: string) {
-		this.socket.emit('leaveCircle', circleId);
+		this.getSocket().emit('leaveCircle', circleId);
 	}
 
 	public sendOffer(toPeerId: string, offer: any) {
-		this.socket.emit('sendOffer', toPeerId, offer);
+		this.getSocket().emit('sendOffer', toPeerId, offer);
 	}
 
 	public sendAnswer(toPeerId: string, answer: any) {
-		this.socket.emit('sendAnswer', toPeerId, answer);
+		this.getSocket().emit('sendAnswer', toPeerId, answer);
 	}
 
 	public sendIceCandidate(toPeerId: string, iceCandidate: any) {
-		this.socket.emit('sendIceCandidate', toPeerId, iceCandidate);
+		this.getSocket().emit('sendIceCandidate', toPeerId, iceCandidate);
 	}
 
 	// ====== SOCKET ADMIN ======
 	public onConnect(listener: (sessionIdentifier: string) => void) {
-		this.socket.on('connect', () => {
-			const sessionIdentifier = this.socket!.id!;
+		this.getSocket().on('connect', () => {
+			const sessionIdentifier = this.getSocket().id!; // socket is connected so we have an id available
 			listener(sessionIdentifier);
 		});
 	}
 
 	public onConnectError(listener: (error: Error) => void) {
-		this.socket.on('connect_error', listener);
+		this.getSocket().on('connect_error', listener);
 	}
 
 	public onDisconnect(listener: (reason: string) => void) {
-		this.socket.on('disconnect', listener);
+		this.getSocket().on('disconnect', listener);
 	}
 
 	// ====== SERVER TO CLIENT HANDLERS ======
@@ -90,22 +94,30 @@ export class Signaler extends EventTarget {
 	// as the second parameter
 	public onNewRoomMember(listener: (newPeerId: string) => void) {
 		// TODO change this to new circle member instead of new room member
-		this.socket.on('newRoomMember', listener);
+		this.getSocket().on('newRoomMember', listener);
 	}
 
 	public onNewOffer(listener: (event: newOfferEvent) => void) {
-		this.socket.on('newOffer', listener);
+		this.getSocket().on('newOffer', listener);
 	}
 
 	public onNewAnswer(listener: (event: newAnswerEvent) => void) {
-		this.socket.on('newAnswer', listener);
+		this.getSocket().on('newAnswer', listener);
 	}
 
 	public onNewIceCandidate(listener: (event: newIceCandidateEvent) => void) {
-		this.socket.on('newIceCandidate', listener);
+		this.getSocket().on('newIceCandidate', listener);
 	}
 
 	public close() {
-		this.socket.close();
+		this.getSocket().close();
+	}
+
+	private getSocket(): Socket<ServerToClientEvents, ClientToServerEvents> {
+		if (!this.socket) {
+			throw new Error('Signaler is not initialized');
+		}
+
+		return this.socket;
 	}
 }

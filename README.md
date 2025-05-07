@@ -12,10 +12,12 @@
 
 
 CHECKPOINT 06/05:
-- missing initialization of the cluster
 - missing console.log everywhere to check if it can work ok
 - handle cluster membership changes (e.g a new follower joins etc)
-- update the peer count variable
+
+SIGNALER
+- Remove the circle id 
+- Refactor to implement eventTarget
 
 Algo related 
 - Optimize by sending batches of event instead of one event at a time
