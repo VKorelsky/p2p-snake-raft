@@ -11,10 +11,8 @@
   - newPersistedEvent - when we are applying something to the state machine
 - Iterator over peer pool so that I can ping each peer separatel
 
-CHECKPOINT 06/05:
-
-- missing console.log everywhere to check if it can work ok
-- handle cluster membership changes (e.g a new follower joins etc)
+CHECKPOINT 07/05
+- Try it and debug everything that comes up
 
 SIGNALER
 

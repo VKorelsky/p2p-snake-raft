@@ -41,7 +41,9 @@
 		logObserver.connect();
 	};
 
-	const disconnect = () => {};
+	const disconnect = () => {
+		logObserver?.leave();
+	};
 
 	onMount(() => {
 		// do nothing for now, eventually maybe connect to the signaler
