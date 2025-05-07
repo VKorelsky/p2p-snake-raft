@@ -8,17 +8,22 @@ import type { newOfferEvent, Signaler } from './signaler';
 // peerDisconnectedEvent
 // newMessage
 
+interface PeerMap {
+	[peerId: string]: PeerConnection;
+}
+
 export class PeerPool extends EventTarget {
 	private ownPeerId: string;
 	private signaler: Signaler;
-	private peers: { [peerId: string]: PeerConnection };
+	private peers: PeerMap;
 
-	public constructor(ownPeerId: string, signaler: Signaler) {
+	public constructor(signaler: Signaler) {
 		super();
-		this.ownPeerId = ownPeerId;
+		this.ownPeerId = '';
 		this.signaler = signaler;
 		this.peers = {};
 
+		this.signaler.onConnect((id) => (this.ownPeerId = id));
 		this.signaler.onNewRoomMember(this.getNewRoomMemberHandler());
 		this.signaler.onNewOffer(this.getNewOfferHandler());
 	}
@@ -27,7 +32,7 @@ export class PeerPool extends EventTarget {
 		return Object.keys(this.peers).length;
 	}
 
-	public getOpenPeers(): { [peerId: string]: PeerConnection } {
+	public getOpenPeers(): PeerMap {
 		return Object.fromEntries(Object.entries(this.peers).filter(([_, peer]) => peer.isOpen()));
 	}
 

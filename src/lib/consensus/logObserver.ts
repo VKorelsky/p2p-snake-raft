@@ -2,42 +2,39 @@ import { PeerPool } from '$lib/rtc/peerPool';
 import { Signaler } from '$lib/rtc/signaler';
 import type { Serializable } from '$lib/types';
 import { getRandomNumberInRange } from '$lib/utils';
-import { parse } from 'svelte/compiler';
 import {
 	AppendEntryMessage,
 	AppendEntryResponse,
+	RequestAppendMessage,
 	RequestElectionMessage,
-	RequestElectionResponse,
-	RequestAppendMessage
+	RequestElectionResponse
 } from './message';
 
 // events that will be shared with wider world
-interface Event<T> {
+interface ObserverEvent<T> extends Event {
 	detail: T;
 	[key: string]: any;
 }
 
 // newLogEntry
-interface NewLogEntryEvent<T> extends Event<{ entry: T }> {}
+interface NewLogEntryEvent<T> extends ObserverEvent<{ entry: T }> {}
 
 // observerTypeChanged
 interface ObserverTypeChangeEvent
-	extends Event<{
-		oldType: LogObserverType;
+	extends ObserverEvent<{
+		term: number;
 		newType: LogObserverType;
 	}> {}
 
 // peerConnected
-interface NewPeerConnected extends Event<{}> {}
+interface NewPeerConnected extends ObserverEvent<{}> {}
 
 // peerDisconnected
-interface PeerDisconnected extends Event<{}> {}
+interface PeerDisconnected extends ObserverEvent<{}> {}
 
 type LogObserverType = 'LEADER' | 'FOLLOWER' | 'CANDIDATE';
 type ClusterMemberId = string;
 
-// This is the replicated log
-// make it a  linked list
 export class ObservedLogEntry<T> implements Serializable {
 	entry: T;
 	term: number;
@@ -75,10 +72,9 @@ export class ObservedLogEntry<T> implements Serializable {
 	}
 }
 
-// TODO peerPool and Signaler should have some methods to create them before connecting
 export class LogObserver extends EventTarget {
-	private peerPool?: PeerPool;
-	private signaler?: Signaler;
+	private peerPool: PeerPool;
+	private signaler: Signaler;
 
 	private type: LogObserverType;
 	private ownId?: ClusterMemberId;
@@ -107,47 +103,61 @@ export class LogObserver extends EventTarget {
 
 	public constructor() {
 		super();
+
+		// SIGNALER
+		// TODO remove the hardcoded roomID
+		this.signaler = new Signaler('697d8c94-cee3-4a99-a3b6-b7cced7927fc');
+
+		this.signaler.onConnect((sessionIdentifier) => (this.ownId = sessionIdentifier));
+		this.signaler.onConnectError((err) => console.error(err));
+		this.signaler.onDisconnect((reason) =>
+			console.log(`Disconnected from socket. Reason provided is ${reason}`)
+		);
+
+		// PEER POOL
+		this.peerPool = new PeerPool(this.signaler);
+		this.peerPool.addEventListener('peerConnected', (event: any) => {
+			console.log(`Peer ${event.detail.peerId} connected`);
+
+			const dispatch: NewPeerConnected = new CustomEvent('peerConnected', {
+				detail: {}
+			});
+
+			this.dispatchEvent(dispatch);
+		});
+
+		this.peerPool.addEventListener('peerDisconnected', (event: any) => {
+			console.log(`Peer ${event.detail.peerId} disconnected`);
+
+			const dispatch: PeerDisconnected = new CustomEvent('peerDisconnected', { detail: {} });
+			this.dispatchEvent(dispatch);
+		});
+
+		this.peerPool.addEventListener('newMessage', (event: any) => {
+			console.log('New message received:', event.detail);
+			this.processIncomingMessage(event.detail.peerId, event.detail.message);
+		});
+
 		// INITIAL NODE STATE
 		this.type = 'FOLLOWER';
 		this.currentTerm = 0;
 		this.leaderId = '';
 		this.nbVotes = 0;
 		this.followerState = {};
+		this.electionTimeoutMs = getRandomNumberInRange(150, 300);
+		this.heartbeatIntervalMs = 50; // must be below election interval, otherwise elections will be triggered.
 
 		// INITIAL LOG STATE
 		this.log = [null]; // start with one null entry. The first proper entry will be at index 1.
 		this.idxLastReplicated = 0;
 		this.idxLastApplied = 0;
 
-		this.electionTimeoutMs = getRandomNumberInRange(150, 300);
-		this.heartbeatIntervalMs = 50; // must be below election interval, otherwise elections will be triggered.
-
+		// START FOLLOWER TIMEOUT
 		this.resetElectionTimeout();
 	}
 
-	public startObserving(): void {
-		// TODO should not store circle ID here
-		this.signaler = new Signaler('697d8c94-cee3-4a99-a3b6-b7cced7927fc');
-
-		this.signaler.onConnect((sessionIdentifier) => {
-			this.initPeerPool(sessionIdentifier);
-		});
-
-		this.signaler.onConnectError((err) => {
-			console.error(err);
-		});
-
-		this.signaler.onDisconnect((reason) => {
-			console.log(`Disconnected from socket. Reason provided is ${reason}`);
-		});
-	}
-
-	public getPeerCount(): number {
-		return this.peerPool!.getConnectedPeerCount();
-	}
-
-	public getObserverType(): LogObserverType {
-		return this.type;
+	public connect() {
+		this.signaler.connect();
 	}
 
 	public leave(): void {
@@ -165,39 +175,17 @@ export class LogObserver extends EventTarget {
 		}
 	}
 
+	public getPeerCount(): number {
+		return this.peerPool!.getConnectedPeerCount();
+	}
+
+	public getObserverType(): LogObserverType {
+		return this.type;
+	}
+
 	public isReady(): boolean {
 		// ready to accept entries if you are not a candidate
 		return this.type !== 'CANDIDATE';
-	}
-
-	private initPeerPool(ownId: ClusterMemberId) {
-		this.ownId = ownId;
-		// TODO probably a way to not have to put `!` to tell TS that we have a signaler
-		this.peerPool = new PeerPool(ownId, this.signaler!);
-
-		this.peerPool.addEventListener('peerConnected', (event: any) => {
-			console.log(`Peer ${event.detail.peerId} connected`);
-			this.state.peerCount += 1;
-
-			const dispatch = new CustomEvent('peerConnected', {
-				detail: {}
-			});
-
-			this.dispatchEvent(dispatch);
-		});
-
-		this.peerPool.addEventListener('peerDisconnected', (event: any) => {
-			console.log(`Peer ${event.detail.peerId} disconnected`);
-			this.state.peerCount -= 1;
-
-			const dispatch = new CustomEvent('peerDisconnected', { detail: {} });
-			this.dispatchEvent(dispatch);
-		});
-
-		this.peerPool.addEventListener('newMessage', (event: any) => {
-			console.log('New message event received:', event.detail);
-			this.processIncomingMessage(event.detail.peerId, event.detail.message);
-		});
 	}
 
 	// Deserialize and route message to correct processor
@@ -576,6 +564,12 @@ export class LogObserver extends EventTarget {
 
 				break;
 		}
+
+		const event: ObserverTypeChangeEvent = new CustomEvent('ObserverTypeChangeEvent', {
+			detail: { term: this.currentTerm, newType: this.type }
+		});
+
+		this.dispatchEvent(event);
 	}
 
 	private getLastLogEntry(): ObservedLogEntry<any> {

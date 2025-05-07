@@ -7,7 +7,9 @@
 
 	let logObserver: LogObserver | undefined = $state();
 	let connectedPeerCount: number = $state(0);
-	let connected: boolean = $state(false);
+	let clusterReady: boolean = $state(false);
+	let observerType: string = $state('');
+	let term: number = $state(0);
 
 	let snakeMoves: Move[] = $state([]);
 
@@ -18,6 +20,16 @@
 	const connect = () => {
 		logObserver = new LogObserver();
 
+		logObserver.addEventListener('ready', () => {
+			clusterReady = true;
+		});
+
+		logObserver.addEventListener('observerStateChange', (event: any) => {
+			// fired upon new term, new transition of state
+			term = event.term;
+			observerType = event.newType;
+		});
+
 		logObserver.addEventListener('peerConnected', () => (connectedPeerCount += 1));
 		logObserver.addEventListener('peerDisconnected', () => (connectedPeerCount -= 1));
 
@@ -26,8 +38,7 @@
 		});
 
 		// todo probably should have some event to indicate that I am succesfully connected instead of blindly assuming
-		connected = true;
-		logObserver.startObserving();
+		logObserver.connect();
 	};
 
 	const disconnect = () => {};
@@ -122,7 +133,8 @@
 	<!-- ROOM INFO -->
 	<div class="my-7">
 		<p class="text-shadow-blue-50">
-			<b>Peers:</b> {connectedPeerCount}
+			<b>Peers:</b>
+			{connectedPeerCount}
 		</p>
 	</div>
 
@@ -131,19 +143,19 @@
 		<div class="flex flex-row space-x-4">
 			<button
 				class="h-auto w-auto rounded bg-blue-500 px-4 py-2 font-bold text-white hover:bg-blue-700"
-				onclick={connected ? disconnect : connect}
+				onclick={clusterReady ? disconnect : connect}
 			>
-				{connected ? 'Disconnect' : 'Connect'}
+				{clusterReady ? 'Disconnect' : 'Connect'}
 			</button>
 			<button
 				class="h-auto w-auto rounded px-4 py-2 font-bold text-white
-					{!connected
+					{!clusterReady
 					? 'cursor-not-allowed bg-gray-400'
 					: autoPlayInterval
 						? 'bg-red-500 hover:bg-red-700'
 						: 'bg-green-500 hover:bg-green-700'}"
 				onclick={toggleAutoPlay}
-				disabled={!connected}
+				disabled={!clusterReady}
 			>
 				{autoPlayInterval ? 'Stop' : 'Start'} auto play
 			</button>

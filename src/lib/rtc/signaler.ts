@@ -110,7 +110,12 @@ export class Signaler extends EventTarget {
 	}
 
 	public close() {
-		this.getSocket().close();
+		if (!this.socket) {
+			// nothing to do, the connection is trivially already closed
+			return;
+		}
+
+		this.socket.close();
 	}
 
 	private getSocket(): Socket<ServerToClientEvents, ClientToServerEvents> {
