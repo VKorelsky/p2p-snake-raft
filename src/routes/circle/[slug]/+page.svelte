@@ -88,7 +88,7 @@
 	const playMove = (move: Move) => {
 		snakeMoves.push(move);
 		if (logObserver) {
-			logObserver.append(move);
+			logObserver.appendEntry(move);
 		}
 	};
 </script>
@@ -131,10 +131,22 @@
 	></div>
 
 	<!-- ROOM INFO -->
-	<div class="my-7">
+	<div class="my-7 space-y-2">
 		<p class="text-shadow-blue-50">
 			<b>Peers:</b>
 			{connectedPeerCount}
+		</p>
+		<p class="text-shadow-blue-50">
+			<b>Term:</b>
+			{term}
+		</p>
+		<p class="text-shadow-blue-50">
+			<b>Observer Type:</b>
+			{observerType}
+		</p>
+		<p class="text-shadow-blue-50">
+			<b>Cluster Ready:</b>
+			{clusterReady ? 'Yes' : 'No'}
 		</p>
 	</div>
 
