@@ -10,12 +10,18 @@
 
 		observer.addEventListener('ready', () => {
 			clusterReady = true;
+			const obsId = observer.getOwnId();
+
+			if (obsId) {
+				ownId = obsId;
+			}
 		});
 
 		observer.addEventListener('observerStateChange', (event: any) => {
 			// fired upon new term, new transition of state
-			term = event.term;
-			observerType = event.newType;
+			console.log("NODE TYPE TRANSITION EVENT RECEIVED", event)
+			term = event.detail.term;
+			observerType = event.detail.newType;
 		});
 
 		observer.addEventListener('peerConnected', () => (connectedPeerCount += 1));
@@ -33,6 +39,7 @@
 	let clusterReady: boolean = $state(false);
 	let observerType: string = $state('');
 	let term: number = $state(0);
+	let ownId: string = $state('');
 
 	let snakeMoves: Move[] = $state([]);
 
@@ -92,8 +99,8 @@
 	// the only messages I can now send are Game commands
 	const playMove = (move: Move) => {
 		snakeMoves.push(move);
-		if (observer) {
-			observer.appendEntry(move);
+		if (logObserver) {
+			logObserver.appendEntry(move);
 		}
 	};
 </script>
@@ -140,6 +147,10 @@
 		<p class="text-shadow-blue-50">
 			<b>Peers:</b>
 			{connectedPeerCount}
+		</p>
+		<p class="text-shadow-blue-50">
+			<b>Your peer id:</b>
+			{ownId}
 		</p>
 		<p class="text-shadow-blue-50">
 			<b>Term:</b>

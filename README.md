@@ -29,6 +29,7 @@ LOG OBSERVER
   - Send batches of event instead of one event at a time
 - Observability
   - Add console.log to all of the behaviour so we can keep track of what is going on
+  - Currently dispatching the observable state changes a little bit randomly 
 - Cluster membership changes
   - Handle peers joining and leaving
   - Handle own node leaving (as a leader candidate etc etc)

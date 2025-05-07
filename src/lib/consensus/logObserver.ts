@@ -206,6 +206,10 @@ export class LogObserver extends EventTarget {
 		return this.peerPool.getConnectedPeerCount();
 	}
 
+	public getOwnId() {
+		return this.ownId;
+	}
+
 	public getObserverType(): LogObserverType {
 		return this.type;
 	}
@@ -340,9 +344,10 @@ export class LogObserver extends EventTarget {
 			When the cluster first initializes, the leader id is not set.
 			All nodes start as followers and it will happen that they will stay followers until they hear from the first elected leader
 			When they do, they should update their id
-		*/ 
+		*/
 		if (!this.leaderId) {
 			this.leaderId = message.leaderId;
+			this.dispatchObserverStateEvent();
 		}
 
 		// here I am a follower of the current leader
@@ -617,7 +622,11 @@ export class LogObserver extends EventTarget {
 				break;
 		}
 
-		const event: ObserverTypeChangeEvent = new CustomEvent('ObserverTypeChangeEvent', {
+		this.dispatchObserverStateEvent();
+	}
+
+	private dispatchObserverStateEvent() {
+		const event: ObserverTypeChangeEvent = new CustomEvent('observerStateChange', {
 			detail: { term: this.currentTerm, newType: this.type }
 		});
 
