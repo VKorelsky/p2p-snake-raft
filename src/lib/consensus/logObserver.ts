@@ -101,6 +101,9 @@ export class LogObserver extends EventTarget {
 	private heartbeatInterval?: number;
 	private electionTimeout?: number;
 
+	private nbPeers = 0;
+	private minClusterSize = 3;
+
 	public constructor() {
 		super();
 
@@ -118,6 +121,13 @@ export class LogObserver extends EventTarget {
 		this.peerPool = new PeerPool(this.signaler);
 		this.peerPool.addEventListener('peerConnected', (event: any) => {
 			console.log(`Peer ${event.detail.peerId} connected`);
+
+			this.nbPeers += 1;
+
+			if (this.nbPeers >= this.minClusterSize) {
+				console.log('[OBSERVER] Minimum cluster size reached. Starting election process.');
+				this.start();
+			};
 
 			const dispatch: NewPeerConnected = new CustomEvent('peerConnected', {
 				detail: {}
@@ -152,13 +162,18 @@ export class LogObserver extends EventTarget {
 		this.log = [null]; // start with one null entry. The first proper entry will be at index 1.
 		this.idxLastReplicated = 0;
 		this.idxLastApplied = 0;
-
-		// START FOLLOWER TIMEOUT
-		this.resetElectionTimeout();
 	}
 
 	public connect() {
 		this.signaler.connect();
+	}
+
+	/*
+		Since we are not currently handling cluster membership changes gracefully 
+		each node is going to wait until the number of peers is a certain amount then set it's election timeout
+	*/
+	private start() {
+		this.resetElectionTimeout();
 	}
 
 	public leave(): void {
