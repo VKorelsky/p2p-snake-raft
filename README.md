@@ -5,6 +5,9 @@
 - Add an endpoint in the BE to create a circle
 - Make the distrib log an abstract type so that it doesn't matter what is actually stored in the log
     - All event names should be constants
+    - events that matter to the log observer. 
+    - debug events (e.g log type change, term change etc)
+    - newPersistedEvent - when we are applying something to the state machine
 - Iterator over peer pool so that I can ping each peer separately
 
 

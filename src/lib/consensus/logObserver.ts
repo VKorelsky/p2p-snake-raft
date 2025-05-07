@@ -140,14 +140,6 @@ export class LogObserver extends EventTarget {
 		});
 	}
 
-	public append(newEntry: string) {
-		if (!this.peerPool) {
-			throw new Error('Cannot share log entry: PeerPool is not initialized.');
-		}
-
-		this.peerPool.broadcast(newEntry);
-	}
-
 	public getPeerCount(): number {
 		return this.peerPool!.getConnectedPeerCount();
 	}
@@ -368,8 +360,6 @@ export class LogObserver extends EventTarget {
 
 			if (!entry.committed) {
 				entry.commit();
-
-				// TODO make a private method for this
 				this.applyEntry(entry.entry);
 			}
 
@@ -456,7 +446,7 @@ export class LogObserver extends EventTarget {
 		}
 	}
 
-	private handleRequestAppendMessage(fromPeerId: string, message: RequestAppendMessage) {
+	private handleRequestAppendMessage(_: string, message: RequestAppendMessage) {
 		// this is client request to add a message to the shared log
 		this.appendEntry(message.msg);
 	}
