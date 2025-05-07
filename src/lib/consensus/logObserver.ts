@@ -83,6 +83,7 @@ export class LogObserver extends EventTarget {
 	private type: LogObserverType;
 	private ownId?: ClusterMemberId;
 	private votedFor?: ClusterMemberId;
+	private nbVotes: number; // votes received when node was in candidate state
 
 	private currentTerm: number;
 	private leaderId: ClusterMemberId;
@@ -112,12 +113,13 @@ export class LogObserver extends EventTarget {
 		this.type = 'FOLLOWER';
 		this.currentTerm = 0;
 		this.leaderId = '';
+		this.nbVotes = 0;
 		this.peerCount = 0;
 		this.log = [null]; // start with one null entry. The first proper entry will be at index 1.
 		this.idxLastReplicated = 0;
 		this.idxLastApplied = 0;
-		this.electionTimeoutMs = getRandomNumberInRange(3000, 5000);
-		this.heartbeatIntervalMs = 2000; // must be below election interval, otherwise elections will be triggered.
+		this.electionTimeoutMs = getRandomNumberInRange(150, 300);
+		this.heartbeatIntervalMs = 50; // must be below election interval, otherwise elections will be triggered.
 
 		// TODO workout when to start triggering this.
 		this.resetElectionTimeout();
@@ -294,12 +296,11 @@ export class LogObserver extends EventTarget {
 
 	private handleAppendEntryMessage(fromPeerId: string, message: AppendEntryMessage) {
 		// check the term, if I am on an older term, update and transition to follower
+		// TODO can probably handle both the case where I am a candidate or a follower in this one
 		if (message.term > this.currentTerm) {
-			// the cluster has moved on, I should be a follower.
+			// the cluster has moved on, I should be a follower if I am not already
 			this.currentTerm = message.term;
-			this.transitionTo('FOLLOWER');
-			this.leaderId = message.leaderId;
-			return;
+			this.transitionTo('FOLLOWER', { newLeaderId: message.leaderId });
 		}
 
 		if (message.term < this.currentTerm) {
@@ -309,8 +310,7 @@ export class LogObserver extends EventTarget {
 
 		switch (this.type) {
 			case 'CANDIDATE':
-				this.transitionTo('FOLLOWER');
-				this.leaderId = message.leaderId;
+				this.transitionTo('FOLLOWER', { newLeaderId: message.leaderId });
 				break;
 			case 'LEADER':
 				// split brain scenario
@@ -452,41 +452,112 @@ export class LogObserver extends EventTarget {
 	}
 
 	// ================= REQUEST ELECTION ==================
-	// private requestElection() {}
+	private requestElection() {
+		this.currentTerm += 1;
+		this.votedFor = this.ownId;
+		this.nbVotes = 1;
+		this.resetElectionTimeout();
 
-	private handleRequestElectionMessage(fromPeerId: string, message: RequestElectionMessage) {
-		const termIsGreaterThanOrEqual = message.term < this.state.currentTerm;
+		const idxLastEntry = this.log.length - 1;
+		const lastEntry = this.log[idxLastEntry];
 
-		const isLogUpToDate =
-			message.lastLogEntryMetadata.term === this.state.currentTerm &&
-			message.lastLogEntryMetadata.index === this.state.idxLastAppended;
-
-		const voteGranted = this.votedFor === undefined && termIsGreaterThanOrEqual && isLogUpToDate;
-
-		this.peerPool!.sendMessage(
-			fromPeerId,
-			new RequestElectionResponse(this.state.currentTerm, voteGranted)
+		const msg = new RequestElectionMessage(
+			this.currentTerm,
+			this.ownId!,
+			idxLastEntry,
+			lastEntry!.term
 		);
 
-		this.votedFor = fromPeerId;
+		this.peerPool!.broadcast(msg);
 	}
 
-	private handleRequestElectionResponse(fromPeerId: string, message: RequestElectionResponse) {}
+	private handleRequestElectionMessage(fromPeerId: string, message: RequestElectionMessage) {
+		if (message.term < this.currentTerm) {
+			// ignore, this is a stale node
+			this.denyVote(fromPeerId);
+			return;
+		}
+
+		if (message.term >= this.currentTerm) {
+			this.currentTerm = message.term;
+		}
+
+		const lastEntry = this.log[this.log.length - 1]!;
+
+		const isCandidateLogUpToDate =
+			(message.termLastLogEntry === lastEntry.term &&
+				message.idxLastLogEntry >= this.log.length - 1) ||
+			lastEntry.term > message.termLastLogEntry;
+
+		const voteCanBeGranted = !this.votedFor || this.votedFor === message.candidateId;
+
+		if (isCandidateLogUpToDate && voteCanBeGranted) {
+			this.grantVote(message.candidateId);
+			this.resetElectionTimeout();
+		} else {
+			this.denyVote(message.candidateId);
+		}
+	}
+
+	private handleRequestElectionResponse(_: string, message: RequestElectionResponse) {
+		if (message.voteGranted) {
+			this.nbVotes += 1;
+
+			if (this.nbVotes >= this.getQuorumSize() && this.type !== 'LEADER') {
+				this.transitionTo('LEADER');
+			}
+
+			return;
+		}
+
+		if (message.term > this.currentTerm) {
+			this.currentTerm = message.term;
+			this.transitionTo('FOLLOWER', { newLeaderId: '' }); // Unknown leader. We will wait for a heartbeat
+			return;
+		}
+
+		// do nothing, wait until you time out again and trigger a new election or another peer triggers an election
+	}
+
+	private grantVote(candidateId: ClusterMemberId) {
+		this.votedFor = candidateId;
+		this.peerPool!.sendMessage(candidateId, new RequestElectionResponse(this.currentTerm, true));
+	}
+
+	private denyVote(candidateId: ClusterMemberId) {
+		this.peerPool!.sendMessage(candidateId, new RequestElectionResponse(this.currentTerm, false));
+	}
 
 	// ================= PRIVATE METHODS ==================
-	private transitionTo(type: LogObserverType) {
-		// cases
-		// I am already at that type
-		// any -> LEADER
-		// any -> CANDIDATE
-		// any -> FOLLOWER
-		this.type = 'FOLLOWER';
-		this.followerState = undefined;
-		this.resetElectionTimeout(); // restart election interval
-	}
+	private transitionTo(type: LogObserverType, context: { newLeaderId: ClusterMemberId } | {} = {}) {
+		// reset variables that should be fresh at the start of a new term
+		this.votedFor = undefined;
 
-	private requestElection() {
-		// TODO
+		switch (type) {
+			case 'CANDIDATE':
+				// Become a candidate and request an election
+				console.log('transitioning to candidate');
+				this.type = 'CANDIDATE';
+				this.requestElection();
+				break;
+			case 'LEADER':
+				console.log('transitioning to leader');
+				break;
+			case 'FOLLOWER':
+				console.log('transitioning to follower');
+				this.type = 'FOLLOWER';
+				this.followerState = undefined;
+
+				// this is somewhat ugly
+				if ('newLeaderId' in context) {
+					this.leaderId = context.newLeaderId;
+				} else {
+					throw new Error('Leader ID must be provided when transitioning to FOLLOWER');
+				}
+
+				this.resetElectionTimeout(); // restart election interval
+				break;
+		}
 	}
 
 	private resetElectionTimeout() {
@@ -494,7 +565,7 @@ export class LogObserver extends EventTarget {
 
 		this.electionTimeout = setTimeout(() => {
 			console.log('No heartbeat detected, triggering election');
-			this.requestElection();
+			this.transitionTo('CANDIDATE');
 		}, this.electionTimeoutMs);
 	}
 

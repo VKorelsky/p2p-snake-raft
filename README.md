@@ -8,14 +8,20 @@
     - events that matter to the log observer. 
     - debug events (e.g log type change, term change etc)
     - newPersistedEvent - when we are applying something to the state machine
-- Iterator over peer pool so that I can ping each peer separately
+- Iterator over peer pool so that I can ping each peer separatel
 
 
 CHECKPOINT 06/05:
 - missing initialization of the cluster
 - missing election algorithms 
 - missing console.log everywhere to check if it can work ok
+- handle cluster membership changes (e.g a new follower joins etc)
 
 Algo related 
 - Optimize by sending batches of event instead of one event at a time
 - Add console.log to all of the behaviour so we can keep track of what is going on
+- Cluster membership changes (start with a predetermined size and then work on improving it)
+
+
+Optimizations
+- Instead of JSON messages, send binary RPCs (protobuf etc)

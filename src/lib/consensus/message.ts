@@ -55,13 +55,13 @@ export class RequestElectionMessage implements Serializable {
 	constructor(
 		public term: number,
 		public candidateId: string,
-		public prevLogIndex: number,
-		public prevLogTerm: number
+		public idxLastLogEntry: number,
+		public termLastLogEntry: number
 	) {
 		this.term = term;
 		this.candidateId = candidateId;
-		this.prevLogIndex = prevLogIndex;
-		this.prevLogTerm = prevLogTerm;
+		this.idxLastLogEntry = idxLastLogEntry;
+		this.termLastLogEntry = termLastLogEntry;
 	}
 
 	toJson(): string {
@@ -69,8 +69,8 @@ export class RequestElectionMessage implements Serializable {
 			type: 'RequestElectionMessage',
 			term: this.term,
 			candidateId: this.candidateId,
-			prevLogIndex: this.prevLogIndex,
-			prevLogTerm: this.prevLogTerm
+			prevLogIndex: this.idxLastLogEntry,
+			prevLogTerm: this.termLastLogEntry
 		});
 	}
 }
