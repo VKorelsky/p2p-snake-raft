@@ -78,7 +78,7 @@ export class LogObserver extends EventTarget {
 
 	private type: LogObserverType;
 	private ownId?: ClusterMemberId;
-	private votedFor?: ClusterMemberId;
+	private votedFor: ClusterMemberId;
 	private nbVotes: number; // votes received when node was in candidate state
 
 	private currentTerm: number;
@@ -142,6 +142,7 @@ export class LogObserver extends EventTarget {
 		this.type = 'FOLLOWER';
 		this.currentTerm = 0;
 		this.leaderId = '';
+		this.votedFor = '';
 		this.nbVotes = 0;
 		this.followerState = {};
 		this.electionTimeoutMs = getRandomNumberInRange(150, 300);
@@ -176,7 +177,7 @@ export class LogObserver extends EventTarget {
 	}
 
 	public getPeerCount(): number {
-		return this.peerPool!.getConnectedPeerCount();
+		return this.peerPool.getConnectedPeerCount();
 	}
 
 	public getObserverType(): LogObserverType {
@@ -262,8 +263,8 @@ export class LogObserver extends EventTarget {
 				this.log.push(newEntry);
 
 				// for each follower, send if the index of the next entry to append matches the index that I've just appended
-				for (const followerId of Object.keys(this.followerState!)) {
-					const follower = this.followerState![followerId];
+				for (const followerId of Object.keys(this.followerState)) {
+					const follower = this.followerState[followerId];
 
 					if (this.log.length - 1 === follower.idxNextEntryToAppend) {
 						this.appendToFollowerLog(followerId, follower.idxNextEntryToAppend);
@@ -273,7 +274,7 @@ export class LogObserver extends EventTarget {
 			case 'FOLLOWER':
 				// ask leader to append the message
 				const msg = new RequestAppendMessage(entry);
-				this.peerPool!.sendMessage(this.leaderId, msg);
+				this.peerPool.sendMessage(this.leaderId, msg);
 				break;
 			case 'CANDIDATE':
 				throw new Error('Not ready to accept write requests');
@@ -384,7 +385,7 @@ export class LogObserver extends EventTarget {
 			return;
 		}
 
-		const followerState = this.followerState![fromPeerId];
+		const followerState = this.followerState[fromPeerId];
 
 		if (message.success) {
 			// log entry successfully appended to the log of the follower
@@ -460,7 +461,7 @@ export class LogObserver extends EventTarget {
 			lastEntry!.term
 		);
 
-		this.peerPool!.broadcast(msg);
+		this.peerPool.broadcast(msg);
 	}
 
 	private handleRequestElectionMessage(fromPeerId: string, message: RequestElectionMessage) {
@@ -481,7 +482,7 @@ export class LogObserver extends EventTarget {
 				message.idxLastLogEntry >= this.log.length - 1) ||
 			lastEntry.term > message.termLastLogEntry;
 
-		const voteCanBeGranted = !this.votedFor || this.votedFor === message.candidateId;
+		const voteCanBeGranted = this.votedFor === '' || this.votedFor === message.candidateId;
 
 		if (isCandidateLogUpToDate && voteCanBeGranted) {
 			this.grantVote(message.candidateId);
@@ -513,16 +514,16 @@ export class LogObserver extends EventTarget {
 
 	private grantVote(candidateId: ClusterMemberId) {
 		this.votedFor = candidateId;
-		this.peerPool!.sendMessage(candidateId, new RequestElectionResponse(this.currentTerm, true));
+		this.peerPool.sendMessage(candidateId, new RequestElectionResponse(this.currentTerm, true));
 	}
 
 	private denyVote(candidateId: ClusterMemberId) {
-		this.peerPool!.sendMessage(candidateId, new RequestElectionResponse(this.currentTerm, false));
+		this.peerPool.sendMessage(candidateId, new RequestElectionResponse(this.currentTerm, false));
 	}
 
 	private transitionTo(type: LogObserverType, context: { newLeaderId: ClusterMemberId } | {} = {}) {
 		// reset variables that should be fresh at the start of a new term
-		this.votedFor = undefined;
+		this.votedFor = '';
 		this.followerState = {};
 		clearInterval(this.heartbeatInterval);
 		this.resetElectionTimeout();
@@ -537,7 +538,7 @@ export class LogObserver extends EventTarget {
 			case 'LEADER':
 				console.log('transitioning to leader');
 
-				for (const peer in Object.keys(this.peerPool!.getOpenPeers())) {
+				for (const peer in Object.keys(this.peerPool.getOpenPeers())) {
 					this.followerState[peer] = {
 						idxNextEntryToAppend: this.log.length - 1,
 						idxLastEntryAppended: 0,
@@ -606,12 +607,12 @@ export class LogObserver extends EventTarget {
 			this.idxLastApplied
 		);
 
-		this.peerPool!.sendMessage(followerId, msg);
+		this.peerPool.sendMessage(followerId, msg);
 	}
 
 	private sendHeartbeats() {
-		for (const followerId of Object.keys(this.followerState!)) {
-			const follower = this.followerState![followerId];
+		for (const followerId of Object.keys(this.followerState)) {
+			const follower = this.followerState[followerId];
 			const timeSinceLastAppendMsg = performance.now() - follower.lastAppendMessageTimestamp;
 
 			if (timeSinceLastAppendMsg < this.heartbeatIntervalMs) {
@@ -627,7 +628,7 @@ export class LogObserver extends EventTarget {
 	}
 
 	private appendToFollowerLog(followerId: ClusterMemberId, entryIndex: number) {
-		this.followerState![followerId].lastAppendMessageTimestamp = performance.now();
+		this.followerState[followerId].lastAppendMessageTimestamp = performance.now();
 
 		const currentEntry = this.log[entryIndex]!.entry;
 
@@ -644,7 +645,7 @@ export class LogObserver extends EventTarget {
 			this.idxLastApplied
 		);
 
-		this.peerPool!.sendMessage(followerId, msg);
+		this.peerPool.sendMessage(followerId, msg);
 	}
 
 	private getQuorumSize() {
