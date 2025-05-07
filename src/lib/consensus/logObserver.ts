@@ -104,7 +104,7 @@ export class LogObserver extends EventTarget {
 	private heartbeatInterval?: number;
 	private electionTimeout?: number;
 
-	private nbPeers = 0;
+	private nbPeers = 1; // Current node counts as one peer
 	private minClusterSize = 3;
 
 	public constructor() {
