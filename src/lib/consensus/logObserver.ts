@@ -334,11 +334,23 @@ export class LogObserver extends EventTarget {
 				);
 		}
 
+		this.resetElectionTimeout();
+
+		/*
+			When the cluster first initializes, the leader id is not set.
+			All nodes start as followers and it will happen that they will stay followers until they hear from the first elected leader
+			When they do, they should update their id
+		*/ 
+		if (!this.leaderId) {
+			this.leaderId = message.leaderId;
+		}
+
 		// here I am a follower of the current leader
 		// first I need to check if the previousLogEntry in the message matches mine
 		const prevLogEntry = this.log[message.prevLogIndex];
+		const prevLogEntryTerm = prevLogEntry ? prevLogEntry.term : this.currentTerm;
 
-		if (prevLogEntry?.term != message.prevLogTerm) {
+		if (prevLogEntryTerm != message.prevLogTerm) {
 			// divergent log histories
 			const msg = new AppendEntryResponse(this.currentTerm, false);
 			this.peerPool?.sendMessage(this.leaderId, msg);
@@ -347,7 +359,8 @@ export class LogObserver extends EventTarget {
 
 		if (message.newLogEntry === null) {
 			// heartbeat
-			this.resetElectionTimeout();
+			const msg = new AppendEntryResponse(this.currentTerm, true);
+			this.peerPool?.sendMessage(this.leaderId, msg);
 			return;
 		}
 
