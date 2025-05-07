@@ -347,6 +347,7 @@ export class LogObserver extends EventTarget {
 		*/
 		if (!this.leaderId) {
 			this.leaderId = message.leaderId;
+			// thought: to make this a little nicer, I can likely use the transition method upon node initialization instead
 			this.dispatchObserverStateEvent();
 		}
 
