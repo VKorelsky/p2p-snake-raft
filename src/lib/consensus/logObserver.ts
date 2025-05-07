@@ -378,13 +378,17 @@ export class LogObserver extends EventTarget {
 			return;
 		}
 
+		// I received a response/acknowledgement from some other node in the cluster
+		// I can keep going as leader
+		this.resetElectionTimeout();
+
 		if (message.term < this.currentTerm) {
 			// ignore message, the inconsistent follower will eventually catch up
 			// the next heartbeat from the leader should tell them what term we are on
 			return;
 		}
 
-		if (!(this.type === 'LEADER')) {
+		if (this.type !== 'LEADER') {
 			// for some reason, I am no longer the lead, so I don't care about your message
 			console.error(
 				`Got an appendEntryResponse but node is no longer the leader. From peer id: ${fromPeerId}; message: ${message}`
@@ -564,7 +568,7 @@ export class LogObserver extends EventTarget {
 		clearTimeout(this.electionTimeout);
 
 		this.electionTimeout = setTimeout(() => {
-			console.log('No heartbeat detected, triggering election');
+			console.log('No heartbeat or acknowledgments detected, triggering election');
 			this.transitionTo('CANDIDATE');
 		}, this.electionTimeoutMs);
 	}
