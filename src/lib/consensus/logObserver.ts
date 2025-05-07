@@ -569,8 +569,12 @@ export class LogObserver extends EventTarget {
 				break;
 			case 'LEADER':
 				console.log('transitioning to leader');
+				Object.keys(this.peerPool.getOpenPeers()).forEach((peer) => {
+					console.log(
+						`Affirming leader status to peer with id: ${peer}`,
+						Object.keys(this.peerPool.getOpenPeers())
+					);
 
-				for (const peer in Object.keys(this.peerPool.getOpenPeers())) {
 					this.followerState[peer] = {
 						idxNextEntryToAppend: this.log.length - 1,
 						idxLastEntryAppended: 0,
@@ -583,8 +587,7 @@ export class LogObserver extends EventTarget {
 					const lastEntryTerm = lastEntry ? lastEntry.term : this.currentTerm;
 
 					this.sendHeartbeat(peer, this.log.length - 1, lastEntryTerm);
-				}
-
+				});
 				this.setLeaderHeartbeatInterval();
 				break;
 			case 'FOLLOWER':
