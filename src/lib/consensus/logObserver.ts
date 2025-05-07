@@ -532,7 +532,6 @@ export class LogObserver extends EventTarget {
 		this.peerPool!.sendMessage(candidateId, new RequestElectionResponse(this.currentTerm, false));
 	}
 
-	// ================= PRIVATE METHODS ==================
 	private transitionTo(type: LogObserverType, context: { newLeaderId: ClusterMemberId } | {} = {}) {
 		// reset variables that should be fresh at the start of a new term
 		this.votedFor = undefined;
@@ -554,7 +553,7 @@ export class LogObserver extends EventTarget {
 					this.followerState[peer] = {
 						idxNextEntryToAppend: this.log.length - 1,
 						idxLastEntryAppended: 0,
-						lastAppendMessageTimestamp: performance.now()
+						lastAppendMessageTimestamp: 0
 					};
 
 					const lastEntry = this.getLastLogEntry();
@@ -592,7 +591,18 @@ export class LogObserver extends EventTarget {
 		}, this.electionTimeoutMs);
 	}
 
+	private setLeaderHeartbeatInterval() {
+		clearInterval(this.heartbeatInterval);
+
+		this.heartbeatInterval = setInterval(() => {
+			console.log('Sending heartbeat to followers');
+			this.sendHeartbeats();
+		}, this.heartbeatIntervalMs);
+	}
+
 	private sendHeartbeat(followerId: ClusterMemberId, prevIndex: number, prevTerm: number | null) {
+		this.followerState[followerId].lastAppendMessageTimestamp = performance.now();
+
 		const msg = new AppendEntryMessage(
 			this.currentTerm,
 			this.ownId!,
@@ -620,15 +630,6 @@ export class LogObserver extends EventTarget {
 
 			this.sendHeartbeat(followerId, prevIndex, prevTerm);
 		}
-	}
-
-	private setLeaderHeartbeatInterval() {
-		clearInterval(this.heartbeatInterval);
-
-		this.heartbeatInterval = setInterval(() => {
-			console.log('Sending heartbeat to followers');
-			this.sendHeartbeats();
-		}, this.heartbeatIntervalMs);
 	}
 
 	private appendToFollowerLog(followerId: ClusterMemberId, entryIndex: number) {
