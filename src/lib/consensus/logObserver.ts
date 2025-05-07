@@ -91,10 +91,8 @@ export class LogObserver extends EventTarget {
 	private idxLastReplicated: number; // the highest log entry known to be replicated on a quorum of machines
 	private idxLastApplied: number; // the highest log entry that was applied to the state machine (in our case, dispatched to the component)
 
-	private peerCount: number; // invariant -> on a leader, this is up to date.
-
 	// only present if observer is leader
-	private followerState?: {
+	private followerState: {
 		[serverId: ClusterMemberId]: {
 			idxNextEntryToAppend: number;
 			idxLastEntryAppended: number;
@@ -109,19 +107,21 @@ export class LogObserver extends EventTarget {
 
 	public constructor() {
 		super();
-		// initial state
+		// INITIAL NODE STATE
 		this.type = 'FOLLOWER';
 		this.currentTerm = 0;
 		this.leaderId = '';
 		this.nbVotes = 0;
-		this.peerCount = 0;
+		this.followerState = {};
+
+		// INITIAL LOG STATE
 		this.log = [null]; // start with one null entry. The first proper entry will be at index 1.
 		this.idxLastReplicated = 0;
 		this.idxLastApplied = 0;
+
 		this.electionTimeoutMs = getRandomNumberInRange(150, 300);
 		this.heartbeatIntervalMs = 50; // must be below election interval, otherwise elections will be triggered.
 
-		// TODO workout when to start triggering this.
 		this.resetElectionTimeout();
 	}
 
@@ -504,6 +504,12 @@ export class LogObserver extends EventTarget {
 	}
 
 	private handleRequestElectionResponse(_: string, message: RequestElectionResponse) {
+		if (message.term > this.currentTerm) {
+			this.currentTerm = message.term;
+			this.transitionTo('FOLLOWER', { newLeaderId: '' }); // Unknown leader. We will wait for a heartbeat
+			return;
+		}
+
 		if (message.voteGranted) {
 			this.nbVotes += 1;
 
@@ -511,12 +517,6 @@ export class LogObserver extends EventTarget {
 				this.transitionTo('LEADER');
 			}
 
-			return;
-		}
-
-		if (message.term > this.currentTerm) {
-			this.currentTerm = message.term;
-			this.transitionTo('FOLLOWER', { newLeaderId: '' }); // Unknown leader. We will wait for a heartbeat
 			return;
 		}
 
@@ -536,6 +536,9 @@ export class LogObserver extends EventTarget {
 	private transitionTo(type: LogObserverType, context: { newLeaderId: ClusterMemberId } | {} = {}) {
 		// reset variables that should be fresh at the start of a new term
 		this.votedFor = undefined;
+		this.followerState = {};
+		clearInterval(this.heartbeatInterval);
+		this.resetElectionTimeout();
 
 		switch (type) {
 			case 'CANDIDATE':
@@ -546,11 +549,24 @@ export class LogObserver extends EventTarget {
 				break;
 			case 'LEADER':
 				console.log('transitioning to leader');
+
+				for (const peer in Object.keys(this.peerPool!.getOpenPeers())) {
+					this.followerState[peer] = {
+						idxNextEntryToAppend: this.log.length - 1,
+						idxLastEntryAppended: 0,
+						lastAppendMessageTimestamp: performance.now()
+					};
+
+					const lastEntry = this.getLastLogEntry();
+
+					this.sendHeartbeat(peer, this.log.length - 1, lastEntry.term);
+				}
+
+				this.setLeaderHeartbeatInterval();
 				break;
 			case 'FOLLOWER':
 				console.log('transitioning to follower');
 				this.type = 'FOLLOWER';
-				this.followerState = undefined;
 
 				// this is somewhat ugly
 				if ('newLeaderId' in context) {
@@ -559,9 +575,12 @@ export class LogObserver extends EventTarget {
 					throw new Error('Leader ID must be provided when transitioning to FOLLOWER');
 				}
 
-				this.resetElectionTimeout(); // restart election interval
 				break;
 		}
+	}
+
+	private getLastLogEntry(): ObservedLogEntry<any> {
+		return this.log[this.log.length - 1]!;
 	}
 
 	private resetElectionTimeout() {
@@ -573,7 +592,20 @@ export class LogObserver extends EventTarget {
 		}, this.electionTimeoutMs);
 	}
 
-	private sendHeartbeat() {
+	private sendHeartbeat(followerId: ClusterMemberId, prevIndex: number, prevTerm: number | null) {
+		const msg = new AppendEntryMessage(
+			this.currentTerm,
+			this.ownId!,
+			prevIndex,
+			prevTerm,
+			null,
+			this.idxLastApplied
+		);
+
+		this.peerPool!.sendMessage(followerId, msg);
+	}
+
+	private sendHeartbeats() {
 		for (const followerId of Object.keys(this.followerState!)) {
 			const follower = this.followerState![followerId];
 			const timeSinceLastAppendMsg = performance.now() - follower.lastAppendMessageTimestamp;
@@ -586,16 +618,7 @@ export class LogObserver extends EventTarget {
 			const prevEntry = this.log[prevIndex];
 			const prevTerm = prevEntry === null ? null : prevEntry.term;
 
-			const msg = new AppendEntryMessage(
-				this.currentTerm,
-				this.ownId!,
-				prevIndex,
-				prevTerm,
-				null,
-				this.idxLastApplied
-			);
-
-			this.peerPool!.sendMessage(followerId, msg);
+			this.sendHeartbeat(followerId, prevIndex, prevTerm);
 		}
 	}
 
@@ -604,7 +627,7 @@ export class LogObserver extends EventTarget {
 
 		this.heartbeatInterval = setInterval(() => {
 			console.log('Sending heartbeat to followers');
-			this.sendHeartbeat();
+			this.sendHeartbeats();
 		}, this.heartbeatIntervalMs);
 	}
 

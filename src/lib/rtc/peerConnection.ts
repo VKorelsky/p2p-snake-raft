@@ -67,7 +67,6 @@ export class PeerConnection extends EventTarget {
 		const offer = await this.connection.createOffer();
 		await this.connection.setLocalDescription(offer);
 
-		// TODO perhaps it's here that we should be setting the initiate connection to true
 		this.dataChannel.addEventListener('open', (event) => {
 			console.log('Channel open event:' + event);
 			console.log('Channel object:' + this.dataChannel);

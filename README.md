@@ -13,9 +13,9 @@
 
 CHECKPOINT 06/05:
 - missing initialization of the cluster
-- missing election algorithms 
 - missing console.log everywhere to check if it can work ok
 - handle cluster membership changes (e.g a new follower joins etc)
+- update the peer count variable
 
 Algo related 
 - Optimize by sending batches of event instead of one event at a time

@@ -27,6 +27,10 @@ export class PeerPool extends EventTarget {
 		return Object.keys(this.peers).length;
 	}
 
+	public getOpenPeers(): { [peerId: string]: PeerConnection } {
+		return Object.fromEntries(Object.entries(this.peers).filter(([_, peer]) => peer.isOpen()));
+	}
+
 	public broadcast(message: Serializable) {
 		Object.values(this.peers).forEach((con) => con.isOpen() && con.sendMessage(message.toJson()));
 	}
