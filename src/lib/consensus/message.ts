@@ -7,7 +7,7 @@ export class AppendEntryMessage implements Serializable {
 		public term: number,
 		public leaderId: string,
 		public prevLogIndex: number,
-		public prevLogTerm: number | null,
+		public prevLogTerm: number,
 		public newLogEntry: string | null,
 		public leaderLastReplicatedIndex: number
 	) {

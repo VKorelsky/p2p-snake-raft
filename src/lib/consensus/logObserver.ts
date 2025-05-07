@@ -481,11 +481,14 @@ export class LogObserver extends EventTarget {
 		const idxLastEntry = this.log.length - 1;
 		const lastEntry = this.log[idxLastEntry];
 
+		// the first entry has no term, so we should start like this
+		const lastEntryTerm = lastEntry ? lastEntry.term : this.currentTerm;
+
 		const msg = new RequestElectionMessage(
 			this.currentTerm,
 			this.ownId!,
 			idxLastEntry,
-			lastEntry!.term
+			lastEntryTerm
 		);
 
 		this.peerPool.broadcast(msg);
@@ -623,7 +626,7 @@ export class LogObserver extends EventTarget {
 		}, this.heartbeatIntervalMs);
 	}
 
-	private sendHeartbeat(followerId: ClusterMemberId, prevIndex: number, prevTerm: number | null) {
+	private sendHeartbeat(followerId: ClusterMemberId, prevIndex: number, prevTerm: number) {
 		this.followerState[followerId].lastAppendMessageTimestamp = performance.now();
 
 		const msg = new AppendEntryMessage(
@@ -649,7 +652,7 @@ export class LogObserver extends EventTarget {
 
 			const prevIndex = follower.idxNextEntryToAppend - 1;
 			const prevEntry = this.log[prevIndex];
-			const prevTerm = prevEntry === null ? null : prevEntry.term;
+			const prevTerm = prevEntry ? prevEntry.term : this.currentTerm;
 
 			this.sendHeartbeat(followerId, prevIndex, prevTerm);
 		}
@@ -662,7 +665,7 @@ export class LogObserver extends EventTarget {
 
 		const prevIndex = entryIndex - 1;
 		const prevEntry = this.log[prevIndex];
-		const prevTerm = prevEntry === null ? null : prevEntry.term;
+		const prevTerm = prevEntry ? prevEntry.term : this.currentTerm;
 
 		const msg = new AppendEntryMessage(
 			this.currentTerm,
