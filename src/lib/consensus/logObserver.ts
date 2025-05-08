@@ -159,7 +159,7 @@ export class LogObserver extends EventTarget {
 		this.nbVotes = 0;
 		this.followerState = {};
 		this.electionTimeoutMs = electionTimeoutMs;
-		this.heartbeatIntervalMs = 500; // must be below election interval, otherwise elections will be triggered.
+		this.heartbeatIntervalMs = 50; // must be below election interval, otherwise elections will be triggered.
 
 		// INITIAL LOG STATE
 		this.log = [null]; // start with one null entry. The first proper entry will be at index 1.

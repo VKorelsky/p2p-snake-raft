@@ -34,7 +34,7 @@
 		return observer;
 	};
 
-	let electionTimeout = $state(getRandomNumberInRange(1000, 2000));
+	let electionTimeout = $state(getRandomNumberInRange(150, 300));
 	let logObserver: LogObserver = $state(initLogObserver());
 	let connectedPeerCount: number = $state(0);
 	let clusterReady: boolean = $state(false);
