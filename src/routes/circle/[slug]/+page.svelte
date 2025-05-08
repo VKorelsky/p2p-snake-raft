@@ -34,7 +34,7 @@
 		return observer;
 	};
 
-	let electionTimeout = $state(getRandomNumberInRange(15000, 30000));
+	let electionTimeout = $state(getRandomNumberInRange(1000, 2000));
 	let logObserver: LogObserver = $state(initLogObserver());
 	let connectedPeerCount: number = $state(0);
 	let clusterReady: boolean = $state(false);
@@ -99,7 +99,6 @@
 
 	// the only messages I can now send are Game commands
 	const playMove = (move: Move) => {
-		snakeMoves.push(move);
 		if (logObserver) {
 			logObserver.appendEntry(move);
 		}

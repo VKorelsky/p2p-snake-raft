@@ -159,7 +159,7 @@ export class LogObserver extends EventTarget {
 		this.nbVotes = 0;
 		this.followerState = {};
 		this.electionTimeoutMs = electionTimeoutMs;
-		this.heartbeatIntervalMs = 5000; // must be below election interval, otherwise elections will be triggered.
+		this.heartbeatIntervalMs = 500; // must be below election interval, otherwise elections will be triggered.
 
 		// INITIAL LOG STATE
 		this.log = [null]; // start with one null entry. The first proper entry will be at index 1.
@@ -225,7 +225,7 @@ export class LogObserver extends EventTarget {
 						parsedMessage.leaderId,
 						parsedMessage.prevLogIndex,
 						parsedMessage.prevLogTerm,
-						parsedMessage.newLogEntries,
+						parsedMessage.newLogEntry,
 						parsedMessage.leaderCommitIndex
 					);
 					this.handleAppendEntryMessage(fromPeerId, appendEntryMsg);
@@ -360,12 +360,13 @@ export class LogObserver extends EventTarget {
 			return;
 		}
 
-		if (message.newLogEntry === null) {
+		if (!message.newLogEntry) {
 			// heartbeat
 			const msg = new AppendEntryResponse(this.currentTerm, true);
 			this.peerPool?.sendMessage(this.leaderId, msg);
 			return;
 		}
+
 
 		const newEntry = new ObservedLogEntry(message.newLogEntry, this.currentTerm);
 		const idxNewEntry = message.prevLogIndex + 1;

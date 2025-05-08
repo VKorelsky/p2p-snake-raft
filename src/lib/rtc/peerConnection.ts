@@ -107,7 +107,7 @@ export class PeerConnection extends EventTarget {
 			throw new Error('No data channel open between the peers');
 		}
 
-		this.dataChannel.send(message.toString());
+		this.dataChannel.send(message);
 	}
 
 	private setupConnection() {
