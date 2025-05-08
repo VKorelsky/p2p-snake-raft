@@ -12,8 +12,7 @@
 - Iterator over peer pool so that I can ping each peer separatel
 
 CHECKPOINT 07/05
-
-- Try it and debug everything that comes up
+- The leader is getting an election timeout and requesting a new election although everything is meant to be stable. Fix that.
 
 SIGNALER
 
@@ -40,6 +39,7 @@ LOG OBSERVER
   - Review logic for heartbeats. How does the leader know that they are getting a reply to their heartbeat? A thought -> if follower is up to date, what is true for their follower state? If a follower is not when we send a heartbeat, what does that mean for the heartbeat, should that behave like a retry?
 - AppendRPC response
   - If a follower receives two appendMessageRPC, then replies twice, what then? Will we ack twice and update the state of this follower twice?
+  - Stale message detection
 
 Optimizations
 

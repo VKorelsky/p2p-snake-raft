@@ -1,12 +1,14 @@
 <script lang="ts">
 	import { LogObserver } from '$lib/consensus/logObserver';
 	import type { Move } from '$lib/types';
-	import { getRandomDirection } from '$lib/utils';
+	import { getRandomDirection, getRandomNumberInRange } from '$lib/utils';
 	import { onDestroy, onMount } from 'svelte';
 	import Snake from '../../../components/Snake.svelte';
 
 	const initLogObserver = (): LogObserver => {
-		const observer = new LogObserver();
+		const observer = new LogObserver(
+			electionTimeout
+		);
 
 		observer.addEventListener('ready', () => {
 			clusterReady = true;
@@ -32,6 +34,7 @@
 		return observer;
 	};
 
+	let electionTimeout = $state(getRandomNumberInRange(15000, 30000));
 	let logObserver: LogObserver = $state(initLogObserver());
 	let connectedPeerCount: number = $state(0);
 	let clusterReady: boolean = $state(false);
@@ -145,6 +148,10 @@
 		<p class="text-shadow-blue-50">
 			<b>Peers:</b>
 			{connectedPeerCount}
+		</p>
+		<p class="text-shadow-blue-50">
+			<b>ElectionTimeout:</b>
+			{electionTimeout}
 		</p>
 		<p class="text-shadow-blue-50">
 			<b>Your peer id:</b>

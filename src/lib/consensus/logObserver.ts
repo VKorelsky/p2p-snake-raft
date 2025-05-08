@@ -107,7 +107,7 @@ export class LogObserver extends EventTarget {
 	private nbPeers = 1; // Current node counts as one peer
 	private minClusterSize = 3;
 
-	public constructor() {
+	public constructor(electionTimeoutMs : number) {
 		super();
 
 		// SIGNALER
@@ -158,8 +158,8 @@ export class LogObserver extends EventTarget {
 		this.votedFor = '';
 		this.nbVotes = 0;
 		this.followerState = {};
-		this.electionTimeoutMs = getRandomNumberInRange(2000, 30000);
-		this.heartbeatIntervalMs = 1000; // must be below election interval, otherwise elections will be triggered.
+		this.electionTimeoutMs = electionTimeoutMs;
+		this.heartbeatIntervalMs = 5000; // must be below election interval, otherwise elections will be triggered.
 
 		// INITIAL LOG STATE
 		this.log = [null]; // start with one null entry. The first proper entry will be at index 1.
@@ -585,7 +585,6 @@ export class LogObserver extends EventTarget {
 		clearInterval(this.heartbeatInterval);
 		this.resetElectionTimeout();
 
-		console.log(`[OBSERVER] Transitioning to ${type}`);
 		switch (type) {
 			case 'CANDIDATE':
 				// Become a candidate and request an election
@@ -683,7 +682,7 @@ export class LogObserver extends EventTarget {
 			const follower = this.followerState[followerId];
 			const timeSinceLastAppendMsg = performance.now() - follower.lastAppendMessageTimestamp;
 
-			if (timeSinceLastAppendMsg >= this.heartbeatIntervalMs) {
+			if (timeSinceLastAppendMsg < this.heartbeatIntervalMs) {
 				continue;
 			}
 

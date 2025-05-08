@@ -110,8 +110,6 @@ export class PeerPool extends EventTarget {
 		});
 
 		connection.addEventListener('newMessage', (event: any) => {
-			console.log(`New message received from peer ${event.detail.peerId}`, event.detail);
-
 			const data = event.detail;
 
 			const newMessageEvent = new CustomEvent('newMessage', {
