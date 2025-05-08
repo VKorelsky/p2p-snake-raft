@@ -528,6 +528,7 @@ export class LogObserver extends EventTarget {
 
 		if (message.term >= this.currentTerm) {
 			this.currentTerm = message.term;
+			this.votedFor = '';
 		}
 
 		const lastEntry = this.log[this.log.length - 1];
