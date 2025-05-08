@@ -219,6 +219,7 @@ export class LogObserver extends EventTarget {
 
 			switch (messageType) {
 				case 'AppendEntryRequest':
+					console.log('[OBSERVER] received append entry request', parsedMessage);
 					const appendEntryMsg = new AppendEntryMessage(
 						parsedMessage.term,
 						parsedMessage.leaderId,
@@ -231,6 +232,7 @@ export class LogObserver extends EventTarget {
 					break;
 
 				case 'AppendEntryResponse':
+					console.log('[OBSERVER] received append entry response', parsedMessage);
 					const appendEntryResponse = new AppendEntryResponse(
 						parsedMessage.term,
 						parsedMessage.success
@@ -240,6 +242,7 @@ export class LogObserver extends EventTarget {
 					break;
 
 				case 'RequestElectionMessage':
+					console.log('[OBSERVER] received request election message', parsedMessage);
 					const requestElectionMsg = new RequestElectionMessage(
 						parsedMessage.term,
 						parsedMessage.candidateId,
@@ -250,6 +253,7 @@ export class LogObserver extends EventTarget {
 					break;
 
 				case 'RequestElectionResponse':
+					console.log('[OBSERVER] received request election response', parsedMessage);
 					const requestElectionResponse = new RequestElectionResponse(
 						parsedMessage.term,
 						parsedMessage.voteGranted
@@ -258,6 +262,7 @@ export class LogObserver extends EventTarget {
 					break;
 
 				case 'RequestAppendMessage':
+					console.log('[OBSERVER] received request append message', parsedMessage);
 					const requestAppendMsg = new RequestAppendMessage(parsedMessage.msg);
 					this.handleRequestAppendMessage(fromPeerId, requestAppendMsg);
 					break;
@@ -404,8 +409,7 @@ export class LogObserver extends EventTarget {
 			return;
 		}
 
-		// I received a response/acknowledgement from some other node in the cluster
-		// I can keep going as leader
+		// I received a response/acknowledgement from some other node in the clusterr
 		this.resetElectionTimeout();
 
 		if (message.term < this.currentTerm) {
@@ -424,9 +428,8 @@ export class LogObserver extends EventTarget {
 
 		const followerState = this.followerState[fromPeerId];
 
-		
 		// In the case of a heartbeat, the follower is going to be up to date
-		// this means that the index of the entry will be equal to the last entry in the leader log 
+		// this means that the index of the entry will be equal to the last entry in the leader log
 		if (message.success) {
 			// log entry successfully appended to the log of the follower
 			// At this point, the idxNextEntryToAppend currently points to the entry that was *just* appended in the follower log
@@ -446,11 +449,11 @@ export class LogObserver extends EventTarget {
 				- Update the last committed entry index.
 			*/
 			const entry = this.log[idxEntry]!;
-			
+
 			// the first entry in the log is null
 			if (entry) {
 				entry.acks += 1;
-	
+
 				if (!entry.committed && entry.acks >= this.getQuorumSize()) {
 					entry.commit();
 					this.idxLastReplicated = idxEntry;
@@ -581,7 +584,7 @@ export class LogObserver extends EventTarget {
 		this.followerState = {};
 		clearInterval(this.heartbeatInterval);
 		this.resetElectionTimeout();
-		
+
 		console.log(`[OBSERVER] Transitioning to ${type}`);
 		switch (type) {
 			case 'CANDIDATE':
@@ -642,6 +645,7 @@ export class LogObserver extends EventTarget {
 	}
 
 	private resetElectionTimeout() {
+		console.log('[OBSERVER] Resetting the election timeout');
 		clearTimeout(this.electionTimeout);
 
 		this.electionTimeout = setTimeout(() => {
