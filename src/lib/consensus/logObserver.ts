@@ -107,7 +107,7 @@ export class LogObserver extends EventTarget {
 	private nbPeers = 1; // Current node counts as one peer
 	private minClusterSize = 3;
 
-	public constructor(electionTimeoutMs : number) {
+	public constructor(electionTimeoutMs: number) {
 		super();
 
 		// SIGNALER
@@ -360,31 +360,30 @@ export class LogObserver extends EventTarget {
 			return;
 		}
 
-		if (!message.newLogEntry) {
-			// heartbeat
-			const msg = new AppendEntryResponse(this.currentTerm, true);
-			this.peerPool?.sendMessage(this.leaderId, msg);
-			return;
-		}
+		// how to update the idx of the last replicated entry?
+		if (message.newLogEntry) {
+			const newEntry = new ObservedLogEntry(message.newLogEntry, this.currentTerm);
+			const idxNewEntry = message.prevLogIndex + 1;
 
-
-		const newEntry = new ObservedLogEntry(message.newLogEntry, this.currentTerm);
-		const idxNewEntry = message.prevLogIndex + 1;
-
-		/* 
+			/* 
 			Two cases here 
 				- Append: this entry is new, so it's index will be outside my bounds
 				- Overwrite: my logs have diverged, and so I am overwriting an older entry
 		*/
-		if (idxNewEntry >= this.log.length) {
-			// appending
-			this.log.push(newEntry);
-		} else {
-			// overwriting
-			this.log[idxNewEntry] = newEntry;
-		}
+			if (idxNewEntry >= this.log.length) {
+				// appending
+				this.log.push(newEntry);
+			} else {
+				// overwriting
+				this.log[idxNewEntry] = newEntry;
+			}
 
-		this.idxLastReplicated = Math.min(idxNewEntry, message.leaderLastReplicatedIndex);
+			this.idxLastReplicated = Math.min(idxNewEntry, message.leaderLastReplicatedIndex);
+		} else {
+			this.idxLastReplicated = Math.min(message.prevLogIndex, message.leaderLastReplicatedIndex);
+		}
+		
+		
 
 		while (this.idxLastApplied !== this.idxLastReplicated) {
 			const idxToApply = this.idxLastApplied + 1;
@@ -608,11 +607,12 @@ export class LogObserver extends EventTarget {
 					};
 
 					// TODO the last log entry may not be set and this is the cause of much grief since the term is null
-					// should refactor and make this type safe
-					const lastEntry = this.getLastLogEntry();
+
+					const lastEntryIndex = this.log.length - 1;
+					const lastEntry = this.log[lastEntryIndex];
 					const lastEntryTerm = lastEntry ? lastEntry.term : this.currentTerm;
 
-					this.sendHeartbeat(peer, this.log.length, lastEntryTerm);
+					this.sendHeartbeat(peer, lastEntryIndex, lastEntryTerm);
 				});
 				this.setLeaderHeartbeatInterval();
 				break;
