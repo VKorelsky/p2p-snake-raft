@@ -1,1 +1,5 @@
+**WIP
+
+What
+======
 Multiplayer snake game between browser peers over WebRTC, using the raft algorithm for game state consensus between the peers
