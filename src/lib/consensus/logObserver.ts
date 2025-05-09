@@ -105,7 +105,7 @@ export class LogObserver extends EventTarget {
 	private electionTimeout?: number;
 
 	private nbPeers = 1; // Current node counts as one peer
-	private minClusterSize = 3;
+	private minClusterSize = 6;
 
 	public constructor(electionTimeoutMs: number) {
 		super();
@@ -159,7 +159,7 @@ export class LogObserver extends EventTarget {
 		this.nbVotes = 0;
 		this.followerState = {};
 		this.electionTimeoutMs = electionTimeoutMs;
-		this.heartbeatIntervalMs = 50; // must be below election interval, otherwise elections will be triggered.
+		this.heartbeatIntervalMs = 10; // must be below election interval, otherwise elections will be triggered.
 
 		// INITIAL LOG STATE
 		this.log = [null]; // start with one null entry. The first proper entry will be at index 1.
@@ -219,7 +219,6 @@ export class LogObserver extends EventTarget {
 
 			switch (messageType) {
 				case 'AppendEntryRequest':
-					console.log('[OBSERVER] received append entry request', parsedMessage);
 					const appendEntryMsg = new AppendEntryMessage(
 						parsedMessage.term,
 						parsedMessage.leaderId,
@@ -232,7 +231,6 @@ export class LogObserver extends EventTarget {
 					break;
 
 				case 'AppendEntryResponse':
-					console.log('[OBSERVER] received append entry response', parsedMessage);
 					const appendEntryResponse = new AppendEntryResponse(
 						parsedMessage.term,
 						parsedMessage.success
@@ -242,7 +240,6 @@ export class LogObserver extends EventTarget {
 					break;
 
 				case 'RequestElectionMessage':
-					console.log('[OBSERVER] received request election message', parsedMessage);
 					const requestElectionMsg = new RequestElectionMessage(
 						parsedMessage.term,
 						parsedMessage.candidateId,
@@ -253,7 +250,6 @@ export class LogObserver extends EventTarget {
 					break;
 
 				case 'RequestElectionResponse':
-					console.log('[OBSERVER] received request election response', parsedMessage);
 					const requestElectionResponse = new RequestElectionResponse(
 						parsedMessage.term,
 						parsedMessage.voteGranted
@@ -262,14 +258,12 @@ export class LogObserver extends EventTarget {
 					break;
 
 				case 'RequestAppendMessage':
-					console.log('[OBSERVER] received request append message', parsedMessage);
 					const requestAppendMsg = new RequestAppendMessage(parsedMessage.msg);
 					this.handleRequestAppendMessage(fromPeerId, requestAppendMsg);
 					break;
 
 				case 'RequestSnapshotMessage':
 					// TBD
-					console.log('RequestSnapshotMessage received but not implemented');
 					break;
 
 				default:
@@ -382,8 +376,6 @@ export class LogObserver extends EventTarget {
 		} else {
 			this.idxLastReplicated = Math.min(message.prevLogIndex, message.leaderLastReplicatedIndex);
 		}
-		
-		
 
 		while (this.idxLastApplied !== this.idxLastReplicated) {
 			const idxToApply = this.idxLastApplied + 1;
@@ -529,6 +521,8 @@ export class LogObserver extends EventTarget {
 		if (message.term >= this.currentTerm) {
 			this.currentTerm = message.term;
 			this.votedFor = '';
+
+			this.dispatchObserverStateEvent();
 		}
 
 		const lastEntry = this.log[this.log.length - 1];
@@ -640,13 +634,8 @@ export class LogObserver extends EventTarget {
 		this.dispatchEvent(event);
 	}
 
-	private getLastLogEntry(): ObservedLogEntry<any> {
-		// refactor to use this
-		return this.log[this.log.length - 1]!;
-	}
-
 	private resetElectionTimeout() {
-		console.log('[OBSERVER] Resetting the election timeout');
+		// console.log('[OBSERVER] Resetting the election timeout');
 		clearTimeout(this.electionTimeout);
 
 		this.electionTimeout = setTimeout(() => {

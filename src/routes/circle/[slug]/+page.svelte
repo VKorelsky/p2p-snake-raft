@@ -34,7 +34,7 @@
 		return observer;
 	};
 
-	let electionTimeout = $state(getRandomNumberInRange(150, 300));
+	let electionTimeout = $state(getRandomNumberInRange(1000, 6000));
 	let logObserver: LogObserver = $state(initLogObserver());
 	let connectedPeerCount: number = $state(0);
 	let clusterReady: boolean = $state(false);
@@ -92,7 +92,7 @@
 			setTimeout(() => {
 				autoPlayInterval = setInterval(() => {
 					playMove(getRandomDirection());
-				}, 1000);
+				}, 100);
 			}, delay);
 		}
 	};
