@@ -1,7 +1,6 @@
 import { PeerPool } from '$lib/rtc/peerPool';
 import { Signaler } from '$lib/rtc/signaler';
 import type { Serializable } from '$lib/types';
-import { getRandomNumberInRange } from '$lib/utils';
 import {
 	AppendEntryMessage,
 	AppendEntryResponse,
@@ -105,7 +104,7 @@ export class LogObserver extends EventTarget {
 	private electionTimeout?: number;
 
 	private nbPeers = 1; // Current node counts as one peer
-	private minClusterSize = 6;
+	private minClusterSize = 4;
 
 	public constructor(electionTimeoutMs: number) {
 		super();
@@ -218,7 +217,7 @@ export class LogObserver extends EventTarget {
 			const messageType = parsedMessage.type;
 
 			switch (messageType) {
-				case 'AppendEntryRequest':
+				case 'AppendEntryRequest': {
 					const appendEntryMsg = new AppendEntryMessage(
 						parsedMessage.term,
 						parsedMessage.leaderId,
@@ -229,8 +228,8 @@ export class LogObserver extends EventTarget {
 					);
 					this.handleAppendEntryMessage(fromPeerId, appendEntryMsg);
 					break;
-
-				case 'AppendEntryResponse':
+				}
+				case 'AppendEntryResponse': {
 					const appendEntryResponse = new AppendEntryResponse(
 						parsedMessage.term,
 						parsedMessage.success
@@ -238,8 +237,8 @@ export class LogObserver extends EventTarget {
 
 					this.handleAppendEntryResponse(fromPeerId, appendEntryResponse);
 					break;
-
-				case 'RequestElectionMessage':
+				}
+				case 'RequestElectionMessage': {
 					const requestElectionMsg = new RequestElectionMessage(
 						parsedMessage.term,
 						parsedMessage.candidateId,
@@ -248,24 +247,24 @@ export class LogObserver extends EventTarget {
 					);
 					this.handleRequestElectionMessage(fromPeerId, requestElectionMsg);
 					break;
-
-				case 'RequestElectionResponse':
+				}
+				case 'RequestElectionResponse': {
 					const requestElectionResponse = new RequestElectionResponse(
 						parsedMessage.term,
 						parsedMessage.voteGranted
 					);
 					this.handleRequestElectionResponse(fromPeerId, requestElectionResponse);
 					break;
-
-				case 'RequestAppendMessage':
+				}
+				case 'RequestAppendMessage': {
 					const requestAppendMsg = new RequestAppendMessage(parsedMessage.msg);
 					this.handleRequestAppendMessage(fromPeerId, requestAppendMsg);
 					break;
-
-				case 'RequestSnapshotMessage':
+				}
+				case 'RequestSnapshotMessage': {
 					// TBD
 					break;
-
+				}
 				default:
 					console.error(`Unknown message type: ${messageType}`, parsedMessage);
 			}
@@ -278,7 +277,7 @@ export class LogObserver extends EventTarget {
 	// ================= APPEND ENTRY ==================
 	public appendEntry(entry: string) {
 		switch (this.type) {
-			case 'LEADER':
+			case 'LEADER': {
 				// append to my log
 				const newEntry = new ObservedLogEntry(entry, this.currentTerm);
 				this.log.push(newEntry);
@@ -292,15 +291,20 @@ export class LogObserver extends EventTarget {
 					}
 				}
 				break;
-			case 'FOLLOWER':
+			}
+			case 'FOLLOWER': {
 				// ask leader to append the message
 				const msg = new RequestAppendMessage(entry);
 				this.peerPool.sendMessage(this.leaderId, msg);
 				break;
-			case 'CANDIDATE':
+			}
+			case 'CANDIDATE': {
 				throw new Error('Not ready to accept write requests');
-			default:
+				break;
+			}
+			default: {
 				throw new Error(`Unknown LogObserverType: ${this.type}`);
+			}
 		}
 	}
 

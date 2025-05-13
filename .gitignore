@@ -1,6 +1,7 @@
 test-results
 node_modules
 
+todos.md
 # Output
 .output
 .vercel

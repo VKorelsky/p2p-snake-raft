@@ -74,6 +74,7 @@
 			return;
 		}
 
+
 		snakeMoves.push(move);
 	};
 
@@ -92,7 +93,7 @@
 			setTimeout(() => {
 				autoPlayInterval = setInterval(() => {
 					playMove(getRandomDirection());
-				}, 100);
+				}, 10);
 			}, delay);
 		}
 	};
