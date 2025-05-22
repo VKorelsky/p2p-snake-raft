@@ -56,7 +56,7 @@ export class Signaler extends EventTarget {
 	}
 
 	private buildSocketUrl(circleId: string): string {
-		return `ws://127.0.0.1:5000?circleId=${circleId}`;
+		return `ws://127.0.0.1:5678?circleId=${circleId}`;
 	}
 
 	// ====== CLIENT TO SERVER HANDLERS ====== //
@@ -85,7 +85,7 @@ export class Signaler extends EventTarget {
 		this.readyCallbacks.push(listener);
 	}
 
-	public onConnect(listener: (sessionIdentifier: string) => void) {
+	public onConnect(listener: (sessionIintifier: string) => void) {
 		this.getSocket().on('connect', () => {
 			const sessionIdentifier = this.getSocket().id!; // socket is connected so we have an id available
 			listener(sessionIdentifier);

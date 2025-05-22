@@ -9,34 +9,6 @@ import {
 	RequestElectionResponse
 } from './message';
 
-// events that will be shared with wider world
-interface ObserverEvent<T> extends Event {
-	detail: T;
-	[key: string]: any;
-}
-
-// newLogEntry
-interface NewLogEntryEvent<T> extends ObserverEvent<{ entry: T }> {}
-
-// observerTypeChanged
-interface ObserverTypeChangeEvent
-	extends ObserverEvent<{
-		term: number;
-		newType: LogObserverType;
-	}> {}
-
-// peerConnected
-interface NewPeerConnected extends ObserverEvent<{}> {}
-
-// peerDisconnected
-interface PeerDisconnected extends ObserverEvent<{}> {}
-
-// clusterReady i.e election triggered
-interface ClusterReady extends ObserverEvent<{}> {}
-
-type LogObserverType = 'LEADER' | 'FOLLOWER' | 'CANDIDATE';
-type ClusterMemberId = string;
-
 export class ObservedLogEntry<T> implements Serializable {
 	entry: T;
 	term: number;
@@ -73,6 +45,39 @@ export class ObservedLogEntry<T> implements Serializable {
 		});
 	}
 }
+
+// Q - how to type the events that are thrown around?
+// take a look at an example
+// addEventListener<K extends keyof RTCPeerConnectionEventMap>(type: K, listener: (this: RTCPeerConnection, ev: RTCPeerConnectionEventMap[K]) => any, options?: boolean | AddEventListenerOptions): void;
+export interface LogObserverEventTarget extends EventTarget {}
+
+// events that will be shared with wider world
+interface ObserverEvent<T> extends Event {
+	detail: T;
+	[key: string]: any;
+}
+
+// newLogEntry
+interface NewLogEntryEvent<T> extends ObserverEvent<{ entry: T }> {}
+
+// observerTypeChanged
+interface ObserverTypeChangeEvent
+	extends ObserverEvent<{
+		term: number;
+		newType: LogObserverType;
+	}> {}
+
+// peerConnected
+interface NewPeerConnected extends ObserverEvent<{}> {}
+
+// peerDisconnected
+interface PeerDisconnected extends ObserverEvent<{}> {}
+
+// clusterReady i.e election triggered
+interface ClusterReady extends ObserverEvent<{}> {}
+
+type LogObserverType = 'LEADER' | 'FOLLOWER' | 'CANDIDATE';
+type ClusterMemberId = string;
 
 export class LogObserver extends EventTarget {
 	private peerPool: PeerPool;
