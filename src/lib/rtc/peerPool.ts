@@ -27,8 +27,7 @@ export class PeerPool extends EventTarget {
 			this.signaler.onConnect((id) => (this.ownPeerId = id));
 			this.signaler.onNewRoomMember(this.getNewRoomMemberHandler());
 			this.signaler.onNewOffer(this.getNewOfferHandler());
-		})
-
+		});
 	}
 
 	public getConnectedPeerCount(): number {
@@ -58,7 +57,11 @@ export class PeerPool extends EventTarget {
 	}
 
 	public close() {
-		Object.values(this.peers).forEach((con) => con.close());
+		Object.values(this.peers).forEach((con) => {
+			console.log("closing connection with peer", con);
+			con.close()
+		}
+	);
 	}
 
 	private getNewRoomMemberHandler() {

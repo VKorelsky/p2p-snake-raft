@@ -103,13 +103,15 @@ export class LogObserver extends EventTarget {
 		};
 	};
 
+	// what happens on disconnection? 
+
 	private electionTimeoutMs: number;
 	private heartbeatIntervalMs: number;
 	private heartbeatInterval?: number;
 	private electionTimeout?: number;
 
 	private nbPeers = 1; // Current node counts as one peer
-	private minClusterSize = 4;
+	private minClusterSize = 2;
 
 	public constructor(electionTimeoutMs: number) {
 		super();
@@ -163,7 +165,7 @@ export class LogObserver extends EventTarget {
 		this.nbVotes = 0;
 		this.followerState = {};
 		this.electionTimeoutMs = electionTimeoutMs;
-		this.heartbeatIntervalMs = 10; // must be below election interval, otherwise elections will be triggered.
+		this.heartbeatIntervalMs = 50; // must be below election interval, otherwise elections will be triggered.
 
 		// INITIAL LOG STATE
 		this.log = [null]; // start with one null entry. The first proper entry will be at index 1.
