@@ -144,7 +144,7 @@ export class PeerConnection extends EventTarget {
 		});
 
 		this.connection.addEventListener('icecandidateerror', (event) => {
-			console.log('ICE candidate error:', event);
+			// console.log('ICE candidate error:', event);
 		});
 
 		this.connection.addEventListener('iceconnectionstatechange', (event) => {

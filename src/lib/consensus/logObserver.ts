@@ -103,7 +103,7 @@ export class LogObserver extends EventTarget {
 		};
 	};
 
-	// what happens on disconnection? 
+	// what happens on disconnection?
 
 	private electionTimeoutMs: number;
 	private heartbeatIntervalMs: number;
@@ -111,7 +111,7 @@ export class LogObserver extends EventTarget {
 	private electionTimeout?: number;
 
 	private nbPeers = 1; // Current node counts as one peer
-	private minClusterSize = 2;
+	private minClusterSize = 4;
 
 	public constructor(electionTimeoutMs: number) {
 		super();
@@ -165,7 +165,7 @@ export class LogObserver extends EventTarget {
 		this.nbVotes = 0;
 		this.followerState = {};
 		this.electionTimeoutMs = electionTimeoutMs;
-		this.heartbeatIntervalMs = 50; // must be below election interval, otherwise elections will be triggered.
+		this.heartbeatIntervalMs = 1000; // must be below election interval, otherwise elections will be triggered.
 
 		// INITIAL LOG STATE
 		this.log = [null]; // start with one null entry. The first proper entry will be at index 1.
@@ -202,6 +202,11 @@ export class LogObserver extends EventTarget {
 
 	public getPeerCount(): number {
 		return this.peerPool.getConnectedPeerCount();
+	}
+
+	public getClusterSize(): number {
+		// adding one to include self
+		return this.getPeerCount() + 1;
 	}
 
 	public getOwnId() {
@@ -320,6 +325,9 @@ export class LogObserver extends EventTarget {
 		// TODO can probably handle both the case where I am a candidate or a follower in this one
 		if (message.term > this.currentTerm) {
 			// the cluster has moved on, I should be a follower if I am not already
+			console.log(
+				`[OBSERVER] [APPEND ENTRY MESSAGE] Changing term from ${this.currentTerm} to ${message.term}`
+			);
 			this.currentTerm = message.term;
 			this.transitionTo('FOLLOWER', { newLeaderId: message.leaderId });
 		}
@@ -340,6 +348,9 @@ export class LogObserver extends EventTarget {
 				);
 		}
 
+		console.log(
+			`[OBSERVER] Received AppendEntry from ${message.leaderId}. Resetting the election timeout`
+		);
 		this.resetElectionTimeout();
 
 		/*
@@ -348,9 +359,7 @@ export class LogObserver extends EventTarget {
 			When they do, they should update their id
 		*/
 		if (!this.leaderId) {
-			this.leaderId = message.leaderId;
-			// thought: to make this a little nicer, I can likely use the transition method upon node initialization instead
-			this.dispatchObserverStateEvent();
+			this.transitionTo('FOLLOWER', { newLeaderId: message.leaderId });
 		}
 
 		// here I am a follower of the current leader
@@ -407,6 +416,9 @@ export class LogObserver extends EventTarget {
 	private handleAppendEntryResponse(fromPeerId: string, message: AppendEntryResponse) {
 		if (message.term > this.currentTerm) {
 			// the cluster has moved on, I should be a follower.
+			console.log(
+				`[OBSERVER] [APPEND ENTRY RESPONSE] Changing term from ${this.currentTerm} to ${message.term}`
+			);
 			this.currentTerm = message.term;
 			this.transitionTo('FOLLOWER');
 			return;
@@ -523,6 +535,7 @@ export class LogObserver extends EventTarget {
 	}
 
 	private handleRequestElectionMessage(fromPeerId: string, message: RequestElectionMessage) {
+		console.log(`[OBSERVER] Election requested by peer with id ${fromPeerId}.`);
 		if (message.term < this.currentTerm) {
 			// ignore, this is a stale node
 			this.denyVote(fromPeerId);
@@ -530,6 +543,9 @@ export class LogObserver extends EventTarget {
 		}
 
 		if (message.term >= this.currentTerm) {
+			console.log(
+				`[OBSERVER] [REQUEST ELECTION MESSAGE] Changing term from ${this.currentTerm} to ${message.term}`
+			);
 			this.currentTerm = message.term;
 			this.votedFor = '';
 
@@ -547,15 +563,23 @@ export class LogObserver extends EventTarget {
 		const voteCanBeGranted = this.votedFor === '' || this.votedFor === message.candidateId;
 
 		if (isCandidateLogUpToDate && voteCanBeGranted) {
+			console.log(`[OBSERVER] Granting vote to peer with id ${fromPeerId}.`);
 			this.grantVote(message.candidateId);
 			this.resetElectionTimeout();
 		} else {
+			console.log(`[OBSERVER] Denying vote to peer with id ${fromPeerId}.`);
 			this.denyVote(message.candidateId);
 		}
 	}
 
-	private handleRequestElectionResponse(_: string, message: RequestElectionResponse) {
+	private handleRequestElectionResponse(fromPeerId: string, message: RequestElectionResponse) {
+		console.log(
+			`[OBSERVER] Received vote result from peer with id ${fromPeerId}. Result is ${message.toJson()}`
+		);
 		if (message.term > this.currentTerm) {
+			console.log(
+				`[OBSERVER] [REQUEST ELECTION RESPONSE] Changing term from ${this.currentTerm} to ${message.term}`
+			);
 			this.currentTerm = message.term;
 			this.transitionTo('FOLLOWER', { newLeaderId: '' }); // Unknown leader. We will wait for a heartbeat
 			return;
@@ -589,7 +613,7 @@ export class LogObserver extends EventTarget {
 		this.votedFor = '';
 		this.followerState = {};
 		clearInterval(this.heartbeatInterval);
-		this.resetElectionTimeout();
+		clearTimeout(this.electionTimeout);
 
 		switch (type) {
 			case 'CANDIDATE':
@@ -612,7 +636,6 @@ export class LogObserver extends EventTarget {
 					};
 
 					// TODO the last log entry may not be set and this is the cause of much grief since the term is null
-
 					const lastEntryIndex = this.log.length - 1;
 					const lastEntry = this.log[lastEntryIndex];
 					const lastEntryTerm = lastEntry ? lastEntry.term : this.currentTerm;
@@ -642,11 +665,11 @@ export class LogObserver extends EventTarget {
 			detail: { term: this.currentTerm, newType: this.type }
 		});
 
+		console.log('SUPPOSEDEDLY DISPATCHING AN EVENT');
 		this.dispatchEvent(event);
 	}
 
 	private resetElectionTimeout() {
-		// console.log('[OBSERVER] Resetting the election timeout');
 		clearTimeout(this.electionTimeout);
 
 		this.electionTimeout = setTimeout(() => {
@@ -720,7 +743,7 @@ export class LogObserver extends EventTarget {
 	}
 
 	private getQuorumSize() {
-		return Math.floor(this.getPeerCount() / 2) + 1;
+		return Math.floor(this.getClusterSize() / 2) + 1;
 	}
 
 	private applyEntry(entry: string) {
