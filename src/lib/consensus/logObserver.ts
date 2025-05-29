@@ -409,6 +409,7 @@ export class LogObserver extends EventTarget {
 			this.idxLastApplied += 1;
 		}
 
+		console.log(`[OBSERVER] SENDING APPEND ENTRY RESPONSE to leader with id ${this.leaderId}`)
 		const msg = new AppendEntryResponse(this.currentTerm, true);
 		this.peerPool?.sendMessage(this.leaderId, msg);
 	}
