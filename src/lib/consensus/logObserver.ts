@@ -111,7 +111,7 @@ export class LogObserver extends EventTarget {
 	private electionTimeout?: number;
 
 	private nbPeers = 1; // Current node counts as one peer
-	private minClusterSize = 4;
+	private minClusterSize = 3;
 
 	public constructor(electionTimeoutMs: number) {
 		super();
@@ -149,7 +149,11 @@ export class LogObserver extends EventTarget {
 		});
 
 		this.peerPool.addEventListener('peerDisconnected', (event: any) => {
-			const dispatch: PeerDisconnected = new CustomEvent('peerDisconnected', { detail: {} });
+			this.nbPeers -= 1;
+
+			const dispatch: PeerDisconnected = new CustomEvent('peerDisconnected', {
+				detail: {}
+			});
 			this.dispatchEvent(dispatch);
 		});
 
@@ -312,7 +316,6 @@ export class LogObserver extends EventTarget {
 			}
 			case 'CANDIDATE': {
 				throw new Error('Not ready to accept write requests');
-				break;
 			}
 			default: {
 				throw new Error(`Unknown LogObserverType: ${this.type}`);
@@ -323,21 +326,16 @@ export class LogObserver extends EventTarget {
 	private handleAppendEntryMessage(fromPeerId: string, message: AppendEntryMessage) {
 		// check the term, if I am on an older term, update and transition to follower
 		// TODO can probably handle both the case where I am a candidate or a follower in this one
-		if (message.term > this.currentTerm) {
-			// the cluster has moved on, I should be a follower if I am not already
-			console.log(
-				`[OBSERVER] [APPEND ENTRY MESSAGE] Changing term from ${this.currentTerm} to ${message.term}`
-			);
-			this.currentTerm = message.term;
-			this.transitionTo('FOLLOWER', { newLeaderId: message.leaderId });
-		}
-
 		if (message.term < this.currentTerm) {
 			// ignore message, received from an older leader
 			return;
 		}
 
 		switch (this.type) {
+			case 'FOLLOWER':
+				this.currentTerm = message.term;
+				this.transitionTo('FOLLOWER', { newLeaderId: message.leaderId });
+				break;
 			case 'CANDIDATE':
 				this.transitionTo('FOLLOWER', { newLeaderId: message.leaderId });
 				break;
@@ -409,7 +407,7 @@ export class LogObserver extends EventTarget {
 			this.idxLastApplied += 1;
 		}
 
-		console.log(`[OBSERVER] SENDING APPEND ENTRY RESPONSE to leader with id ${this.leaderId}`)
+		console.log(`[OBSERVER] SENDING APPEND ENTRY RESPONSE to leader with id ${this.leaderId}`);
 		const msg = new AppendEntryResponse(this.currentTerm, true);
 		this.peerPool?.sendMessage(this.leaderId, msg);
 	}
@@ -608,7 +606,7 @@ export class LogObserver extends EventTarget {
 		this.peerPool.sendMessage(candidateId, new RequestElectionResponse(this.currentTerm, false));
 	}
 
-	private transitionTo(type: LogObserverType, context: { newLeaderId: ClusterMemberId } | {} = {}) {
+	private transitionTo(type: LogObserverType, context: { newLeaderId?: ClusterMemberId } = {}) {
 		console.log(`[OBSERVER] Transitioning from ${this.type} to ${type}`, this);
 		// reset variables that should be fresh at the start of a new term
 		this.votedFor = '';
@@ -650,7 +648,7 @@ export class LogObserver extends EventTarget {
 
 				// this is somewhat ugly
 				if ('newLeaderId' in context) {
-					this.leaderId = context.newLeaderId;
+					this.leaderId = context.newLeaderId as string;
 				} else {
 					throw new Error('Leader ID must be provided when transitioning to FOLLOWER');
 				}
@@ -704,8 +702,17 @@ export class LogObserver extends EventTarget {
 	}
 
 	private sendHeartbeats() {
-		for (const followerId of Object.keys(this.followerState)) {
-			const follower = this.followerState[followerId];
+		for (const peer of Object.keys(this.peerPool.getOpenPeers())) {
+			if (!this.followerState[peer]) {
+				// add new peers to the follower list to ensure they receive heartbeats from leader
+				this.followerState[peer] = {
+					idxNextEntryToAppend: this.log.length,
+					idxLastEntryAppended: 0,
+					lastAppendMessageTimestamp: 0
+				};
+			}
+
+			const follower = this.followerState[peer];
 			const timeSinceLastAppendMsg = performance.now() - follower.lastAppendMessageTimestamp;
 
 			if (timeSinceLastAppendMsg < this.heartbeatIntervalMs) {
@@ -718,7 +725,7 @@ export class LogObserver extends EventTarget {
 			const prevEntry = this.log[prevIndex];
 			const prevTerm = prevEntry ? prevEntry.term : this.currentTerm;
 
-			this.sendHeartbeat(followerId, prevIndex, prevTerm);
+			this.sendHeartbeat(peer, prevIndex, prevTerm);
 		}
 	}
 
