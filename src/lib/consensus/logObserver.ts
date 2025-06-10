@@ -4,10 +4,13 @@ import type { Serializable } from '$lib/types';
 import {
 	AppendEntryMessage,
 	AppendEntryResponse,
+	InstallSnapshotMessage,
+	InstallSnapshotResponse,
 	RequestAppendMessage,
 	RequestElectionMessage,
 	RequestElectionResponse
 } from './message';
+import { readSnapshot, writeSnapshot } from './snapshotManager';
 
 export class ObservedLogEntry<T> implements Serializable {
 	entry: T;
@@ -78,6 +81,13 @@ interface ClusterReady extends ObserverEvent<{}> {}
 
 type LogObserverType = 'LEADER' | 'FOLLOWER' | 'CANDIDATE';
 type ClusterMemberId = string;
+interface SnapshotPayload {
+	term: number;
+	leaderId: string;
+	lastIncludedIndex: number;
+	lastIncludedTerm: number;
+	state: (ObservedLogEntry<string> | null)[];
+}
 
 export class LogObserver extends EventTarget {
 	private peerPool: PeerPool;
@@ -102,9 +112,14 @@ export class LogObserver extends EventTarget {
 			lastAppendMessageTimestamp: number;
 		};
 	};
+	// threshold beyond which leader should compact log
+	private logThreshold: number;
+	// log index through which entries has been applied
+	private lastSnapshotIndex: number;
+	// term as at last snapshot index
+	private lastSnapshotTerm: number;
 
 	// what happens on disconnection?
-
 	private electionTimeoutMs: number;
 	private heartbeatIntervalMs: number;
 	private heartbeatInterval?: number;
@@ -138,11 +153,24 @@ export class LogObserver extends EventTarget {
 				});
 				this.dispatchEvent(clusterReadyEvent);
 
+				// check if observer is a leader, then add the new peer to their follower state
+				const peerId = event.detail.peerId
+
+				if (this.type === "LEADER" && !this.followerState[peerId]) {
+					this.followerState[peerId] = {
+						idxNextEntryToAppend: 1,
+						idxLastEntryAppended: 0,
+						lastAppendMessageTimestamp: 0
+					}
+				}
+
 				this.start();
 			}
 
 			const dispatch: NewPeerConnected = new CustomEvent('peerConnected', {
-				detail: {}
+				detail: {
+					peerCount: this.nbPeers - 1
+				}
 			});
 
 			this.dispatchEvent(dispatch);
@@ -150,9 +178,14 @@ export class LogObserver extends EventTarget {
 
 		this.peerPool.addEventListener('peerDisconnected', (event: any) => {
 			this.nbPeers -= 1;
+			if (this.type === "LEADER") {
+				delete this.followerState[event.detail.peerId]
+			}
 
 			const dispatch: PeerDisconnected = new CustomEvent('peerDisconnected', {
-				detail: {}
+				detail: {
+					peerCount: this.nbPeers - 1
+				}
 			});
 			this.dispatchEvent(dispatch);
 		});
@@ -175,9 +208,15 @@ export class LogObserver extends EventTarget {
 		this.log = [null]; // start with one null entry. The first proper entry will be at index 1.
 		this.idxLastReplicated = 0;
 		this.idxLastApplied = 0;
+
+		// INITIAL SNAPSHOT STATE
+		this.logThreshold = 5;
+		this.lastSnapshotIndex = 0;
+		this.lastSnapshotTerm = 0;
 	}
 
 	public connect() {
+		console.log("connecting to circle server");
 		this.signaler.connect();
 	}
 
@@ -186,6 +225,7 @@ export class LogObserver extends EventTarget {
 		each node is going to wait until the number of peers is a certain amount then set it's election timeout
 	*/
 	private start() {
+		console.log('RUNNING START as ', this.type);
 		this.resetElectionTimeout();
 	}
 
@@ -277,8 +317,25 @@ export class LogObserver extends EventTarget {
 					this.handleRequestAppendMessage(fromPeerId, requestAppendMsg);
 					break;
 				}
-				case 'RequestSnapshotMessage': {
-					// TBD
+				case 'InstallSnapshotRequest': {
+					const installSnapshotMsg = new InstallSnapshotMessage(
+						parsedMessage.term,
+						parsedMessage.leaderId,
+						parsedMessage.lastIncludedIndex,
+						parsedMessage.lastIncludedTerm,
+						parsedMessage.state
+					);
+					this.handleInstallSnapshotRequest(fromPeerId, installSnapshotMsg);
+					break;
+				}
+				case 'InstallSnapshotResponse': {
+					const installSnaphotResponse = new InstallSnapshotResponse(
+						parsedMessage.term,
+						parsedMessage.lastIncludedIndex,
+						parsedMessage.lastInstallTimestamp,
+						parsedMessage.success
+					);
+					this.handleInstallSnapshotResponse(fromPeerId, installSnaphotResponse);
 					break;
 				}
 				default:
@@ -291,7 +348,7 @@ export class LogObserver extends EventTarget {
 	}
 
 	// ================= APPEND ENTRY ==================
-	public appendEntry(entry: string) {
+	public async appendEntry(entry: string) {
 		switch (this.type) {
 			case 'LEADER': {
 				// append to my log
@@ -323,6 +380,53 @@ export class LogObserver extends EventTarget {
 		}
 	}
 
+	private handleInstallSnapshotRequest(fromPeerId: string, message: InstallSnapshotMessage) {
+		if (message.term < this.currentTerm || this.type !== 'FOLLOWER') {
+			// ignore message, received from an older leader
+			return;
+		}
+
+		this.currentTerm = message.term;
+		this.log = [...message.state];
+		this.lastSnapshotIndex = message.lastIncludedIndex;
+		this.lastSnapshotTerm = message.lastIncludedTerm;
+		this.idxLastApplied = message.lastIncludedIndex;
+		this.idxLastReplicated = message.lastIncludedIndex;
+
+		const msg = new InstallSnapshotResponse(
+			this.currentTerm,
+			this.idxLastApplied,
+			performance.now(),
+			true
+		);
+
+		this.peerPool.sendMessage(fromPeerId, msg);
+
+		const entries = this.log.filter((entry) => entry !== null).map((entry) => entry.entry)
+		this.applyEntries(entries)
+	}
+
+	private handleInstallSnapshotResponse(fromPeerId: string, message: InstallSnapshotResponse) {
+		// update followerState with required values
+		if (this.type !== 'LEADER') {
+			// for some reason, I am no longer the lead, so I don't care about your message
+			console.error(
+				`Got an installSnapshotResponse but node is no longer the leader. From peer id: ${fromPeerId}; message: ${message}`
+			);
+			return;
+		}
+
+		console.log('INSTALL SNAPSHOT RESPONSE ', message);
+		// consider that message could be successful or not
+		if (message.success) {
+			const followerState = this.followerState[fromPeerId];
+			followerState.idxLastEntryAppended = message.lastIncludedIndex;
+			followerState.idxNextEntryToAppend = message.lastIncludedIndex + 1;
+			followerState.lastAppendMessageTimestamp = message.lastInstallTimestamp;
+			console.log("LOG AFTER SLICE ", this.log.slice(this.lastSnapshotIndex));
+		}
+	}
+
 	private handleAppendEntryMessage(fromPeerId: string, message: AppendEntryMessage) {
 		// check the term, if I am on an older term, update and transition to follower
 		// TODO can probably handle both the case where I am a candidate or a follower in this one
@@ -350,15 +454,14 @@ export class LogObserver extends EventTarget {
 			`[OBSERVER] Received AppendEntry from ${message.leaderId}. Resetting the election timeout`
 		);
 		this.resetElectionTimeout();
-
 		/*
 			When the cluster first initializes, the leader id is not set.
 			All nodes start as followers and it will happen that they will stay followers until they hear from the first elected leader
 			When they do, they should update their id
 		*/
-		if (!this.leaderId) {
-			this.transitionTo('FOLLOWER', { newLeaderId: message.leaderId });
-		}
+		// if (!this.leaderId) {
+		// 	this.transitionTo('FOLLOWER', { newLeaderId: message.leaderId });
+		// }
 
 		// here I am a follower of the current leader
 		// first I need to check if the previousLogEntry in the message matches mine
@@ -368,7 +471,7 @@ export class LogObserver extends EventTarget {
 		if (prevLogEntryTerm != message.prevLogTerm) {
 			// divergent log histories
 			const msg = new AppendEntryResponse(this.currentTerm, false);
-			this.peerPool?.sendMessage(this.leaderId, msg);
+			this.peerPool.sendMessage(this.leaderId, msg);
 			return;
 		}
 
@@ -399,7 +502,7 @@ export class LogObserver extends EventTarget {
 			const idxToApply = this.idxLastApplied + 1;
 			const entry = this.log[idxToApply]!;
 
-			if (!entry.committed) {
+			if (entry && !entry.committed) {
 				entry.commit();
 				this.applyEntry(entry.entry);
 			}
@@ -407,14 +510,18 @@ export class LogObserver extends EventTarget {
 			this.idxLastApplied += 1;
 		}
 
+		console.log("last applied index ", this.idxLastApplied)
+		console.log("last replicated index ", this.idxLastReplicated)
+		console.log('LOG ', this.log);
+
 		console.log(`[OBSERVER] SENDING APPEND ENTRY RESPONSE to leader with id ${this.leaderId}`);
 		const msg = new AppendEntryResponse(this.currentTerm, true);
-		this.peerPool?.sendMessage(this.leaderId, msg);
+		this.peerPool.sendMessage(this.leaderId, msg);
 	}
 
-	private handleAppendEntryResponse(fromPeerId: string, message: AppendEntryResponse) {
+	private async handleAppendEntryResponse(fromPeerId: string, message: AppendEntryResponse) {
 		if (message.term > this.currentTerm) {
-			// the cluster has moved on, I should be a follower.
+			// the cluster has moved on, I should be a follower
 			console.log(
 				`[OBSERVER] [APPEND ENTRY RESPONSE] Changing term from ${this.currentTerm} to ${message.term}`
 			);
@@ -474,6 +581,21 @@ export class LogObserver extends EventTarget {
 					this.applyEntry(entry.entry);
 					// dispatching the message is equivalent to applying the entry to the state machine
 					this.idxLastApplied = idxEntry;
+					// on receipt of the appendEntryResponse,
+					if (this.idxLastReplicated > this.lastSnapshotIndex + this.logThreshold) {
+						const payload = {
+							lastIncludedTerm: this.currentTerm,
+							lastIncludedIndex: this.idxLastReplicated,
+							state: [...this.log]
+						};
+
+						this.lastSnapshotIndex = this.idxLastReplicated;
+						this.lastSnapshotTerm = this.currentTerm;
+						console.log('LEADER WRITING SNAPSHOT');
+						console.log("LOG BEFORE ", this.log);
+						// TODO: consider removing last snapshot before creating new one
+						await writeSnapshot(payload);
+					}
 				}
 			}
 
@@ -580,7 +702,7 @@ export class LogObserver extends EventTarget {
 				`[OBSERVER] [REQUEST ELECTION RESPONSE] Changing term from ${this.currentTerm} to ${message.term}`
 			);
 			this.currentTerm = message.term;
-			this.transitionTo('FOLLOWER', { newLeaderId: '' }); // Unknown leader. We will wait for a heartbeat
+			this.transitionTo('FOLLOWER'); // Unknown leader. We will wait for a heartbeat
 			return;
 		}
 
@@ -664,7 +786,7 @@ export class LogObserver extends EventTarget {
 			detail: { term: this.currentTerm, newType: this.type }
 		});
 
-		console.log('SUPPOSEDEDLY DISPATCHING AN EVENT');
+		console.log('DISPATCHING observerStateChange EVENT');
 		this.dispatchEvent(event);
 	}
 
@@ -687,45 +809,68 @@ export class LogObserver extends EventTarget {
 	}
 
 	private sendHeartbeat(followerId: ClusterMemberId, prevIndex: number, prevTerm: number) {
-		this.followerState[followerId].lastAppendMessageTimestamp = performance.now();
+		try {
+			this.followerState[followerId].lastAppendMessageTimestamp = performance.now();
 
-		const msg = new AppendEntryMessage(
-			this.currentTerm,
-			this.ownId!,
-			prevIndex,
-			prevTerm,
-			null,
-			this.idxLastApplied
-		);
+			const msg = new AppendEntryMessage(
+				this.currentTerm,
+				this.ownId!,
+				prevIndex,
+				prevTerm,
+				null,
+				this.idxLastApplied
+			);
 
-		this.peerPool.sendMessage(followerId, msg);
+			this.peerPool.sendMessage(followerId, msg);
+		} catch (error) {
+			console.log("[OBSERVER] Failed to send heartbeat to follower with id: ", followerId, " error: ", error);
+		}
 	}
 
-	private sendHeartbeats() {
-		for (const peer of Object.keys(this.peerPool.getOpenPeers())) {
-			if (!this.followerState[peer]) {
-				// add new peers to the follower list to ensure they receive heartbeats from leader
-				this.followerState[peer] = {
-					idxNextEntryToAppend: this.log.length,
-					idxLastEntryAppended: 0,
-					lastAppendMessageTimestamp: 0
-				};
-			}
-
-			const follower = this.followerState[peer];
+	private async sendHeartbeats() {
+		// this loops the follower state object of the leader
+		for (const followerId of Object.keys(this.followerState)) {
+			const follower = this.followerState[followerId];
 			const timeSinceLastAppendMsg = performance.now() - follower.lastAppendMessageTimestamp;
 
 			if (timeSinceLastAppendMsg < this.heartbeatIntervalMs) {
 				continue;
 			}
+			
+			console.log("FOLLOWER ID ", followerId)
+			console.log("snapshot index ", this.lastSnapshotIndex)
+			console.log("idxNextEntryToAppend ", follower.idxNextEntryToAppend)
+			if (follower.idxNextEntryToAppend <= this.lastSnapshotIndex) {
+				// TODO: decide based on the follower's next entry index whether to append to their log
+				// or if their nextEntry is <= lastSnapshotIndex, then send an installSnapshot RPC instead
+				const snapshot = await readSnapshot(`${this.lastSnapshotIndex}-${this.lastSnapshotTerm}`);
+				if (!snapshot) continue;
+				console.log('[OBSERVER] SENDING LATEST SNAPSHOT TO FOLLOWER ID: ', followerId);
+
+				const { lastIncludedIndex, lastIncludedTerm, state } = snapshot;
+				const snapshotPayload = {
+					term: this.currentTerm,
+					leaderId: this.ownId as string,
+					lastIncludedIndex,
+					lastIncludedTerm,
+					state
+				};
+
+				this.sendSnapshotMessage(followerId, snapshotPayload);
+				continue;
+			}
+
+			if (follower.idxNextEntryToAppend < this.log.length) {
+				this.appendToFollowerLog(followerId, follower.idxNextEntryToAppend);
+				continue;
+			}
 
 			// if follower is not up to date, the heartbeat will behave like a retry
-
 			const prevIndex = follower.idxNextEntryToAppend - 1;
 			const prevEntry = this.log[prevIndex];
 			const prevTerm = prevEntry ? prevEntry.term : this.currentTerm;
 
-			this.sendHeartbeat(peer, prevIndex, prevTerm);
+			this.sendHeartbeat(followerId, prevIndex, prevTerm);
 		}
 	}
 
@@ -750,6 +895,18 @@ export class LogObserver extends EventTarget {
 		this.peerPool.sendMessage(followerId, msg);
 	}
 
+	private sendSnapshotMessage(followerId: ClusterMemberId, payload: SnapshotPayload) {
+		const msg = new InstallSnapshotMessage(
+			payload.term,
+			payload.leaderId,
+			payload.lastIncludedIndex,
+			payload.lastIncludedTerm,
+			payload.state
+		);
+
+		this.peerPool.sendMessage(followerId, msg);
+	}
+
 	private getQuorumSize() {
 		return Math.floor(this.getClusterSize() / 2) + 1;
 	}
@@ -761,6 +918,13 @@ export class LogObserver extends EventTarget {
 			}
 		});
 
+		this.dispatchEvent(dispatch);
+	}
+
+	private applyEntries(entries: string[]) {
+		const dispatch = new CustomEvent('newLogEntries', {
+			detail: { entries }
+		});
 		this.dispatchEvent(dispatch);
 	}
 }

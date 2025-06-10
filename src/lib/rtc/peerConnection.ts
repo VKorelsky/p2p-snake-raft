@@ -14,7 +14,7 @@ export class PeerConnection extends EventTarget {
 	private selfId: string;
 	private peerId: string;
 	private connection: RTCPeerConnection;
-	private dataChannel: RTCDataChannel | undefined;
+	private dataChannel?: RTCDataChannel;
 	private signaler: Signaler;
 
 	public constructor(selfId: string, peerId: string, signaler: Signaler) {
@@ -36,7 +36,7 @@ export class PeerConnection extends EventTarget {
 	}
 
 	public async initiateFrom(sessionDescription: RTCSessionDescription) {
-		this.connection.setRemoteDescription(sessionDescription);
+		await this.connection.setRemoteDescription(sessionDescription);
 		const answer = await this.connection.createAnswer();
 		await this.connection.setLocalDescription(answer);
 
@@ -65,7 +65,7 @@ export class PeerConnection extends EventTarget {
 		const offer = await this.connection.createOffer();
 		await this.connection.setLocalDescription(offer);
 
-		this.dataChannel.addEventListener('open', (_) => {});
+		this.dataChannel.addEventListener('open', () => {});
 
 		this.dataChannel.addEventListener('message', (event: MessageEvent) => {
 			const newMessageEvent = new CustomEvent('newMessage', {
@@ -99,20 +99,25 @@ export class PeerConnection extends EventTarget {
 	}
 
 	public sendMessage(message: string) {
-		if (!(this.connection.connectionState === 'connected')) {
-			throw new Error('Connection is not open');
+		try {
+			if (!(this.connection.connectionState === 'connected')) {
+				throw new Error('Connection is not open');
+			}
+	
+			if (!this.dataChannel) {
+				throw new Error('No data channel open between the peers');
+			}
+	
+			this.dataChannel.send(message);
+		} catch (error) {
+			console.log("Error sending message to peer. error: ", error)
 		}
-
-		if (!this.dataChannel) {
-			throw new Error('No data channel open between the peers');
-		}
-
-		this.dataChannel.send(message);
 	}
 
 	private setupConnection() {
 		this.connection.addEventListener('connectionstatechange', () => {
-			if (this.connection.connectionState === 'connected') {
+			const connectionState = this.connection.connectionState;
+			if (connectionState === 'connected') {
 				const connectionEstablishedEvent = new CustomEvent('connectionEstablished', {
 					detail: {
 						peerId: this.peerId
@@ -122,7 +127,7 @@ export class PeerConnection extends EventTarget {
 				this.dispatchEvent(connectionEstablishedEvent);
 			}
 
-			if (this.connection.connectionState === 'failed') {
+			if (connectionState === 'failed') {
 				const connectionFailedEvent = new CustomEvent('connectionFailed', {
 					detail: {
 						peerId: this.peerId
@@ -132,7 +137,7 @@ export class PeerConnection extends EventTarget {
 				this.dispatchEvent(connectionFailedEvent);
 			}
 
-			if (this.connection.connectionState === 'closed') {
+			if (connectionState === 'closed' || connectionState === 'disconnected') {
 				const disconnectedEvent = new CustomEvent('disconnected', {
 					detail: {
 						peerId: this.peerId

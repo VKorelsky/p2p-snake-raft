@@ -62,6 +62,7 @@ export class PeerPool extends EventTarget {
 			con.close()
 		}
 	);
+	this.peers = {}
 	}
 
 	private getNewRoomMemberHandler() {

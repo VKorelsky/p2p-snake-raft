@@ -24,11 +24,17 @@
 			observerType = event.detail.newType;
 		});
 
-		observer.addEventListener('peerConnected', () => (connectedPeerCount += 1));
-		observer.addEventListener('peerDisconnected', () => (connectedPeerCount -= 1));
+		observer.addEventListener('peerConnected', (event: any) => (connectedPeerCount = event.detail.peerCount));
+		observer.addEventListener('peerDisconnected', (event: any) => (connectedPeerCount = event.detail.peerCount));
 
 		observer.addEventListener('newLogEntry', (event: any) => {
 			processNewMove(event.detail!.entry);
+		});
+
+		observer.addEventListener('newLogEntries', (e: any) => {
+			for (const entry of e.detail.entries) {
+				processNewMove(entry);
+			}
 		});
 
 		return observer;
@@ -73,7 +79,6 @@
 			console.error(`Invalid move received ${move}`);
 			return;
 		}
-
 
 		snakeMoves.push(move);
 	};
