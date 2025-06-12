@@ -1,14 +1,13 @@
 <script lang="ts">
-	import { LogObserver } from '$lib/consensus/logObserver';
+	import LogObserver from '$lib/consensus/logObserver'
+	import type { ObserverStateChangeEvent, ObserverPeerConnectedEvent, ObserverPeerDisconnectedEvent, NewLogEntryEvent, NewLogEntriesEvent  } from '$lib/consensus/logObserver';
 	import type { Move } from '$lib/types';
 	import { getRandomDirection, getRandomNumberInRange } from '$lib/utils';
 	import { onDestroy, onMount } from 'svelte';
 	import Snake from '../../../components/Snake.svelte';
 
 	const initLogObserver = (): LogObserver => {
-		const observer = new LogObserver(
-			electionTimeout
-		);
+		const observer = new LogObserver(electionTimeout);
 
 		observer.addEventListener('ready', () => {
 			clusterReady = true;
@@ -19,19 +18,29 @@
 			}
 		});
 
-		observer.addEventListener('observerStateChange', (event: any) => {
-			term = event.detail.term;
-			observerType = event.detail.newType;
+		observer.addEventListener(
+			'observerStateChange',
+			(event: ObserverStateChangeEvent) => {
+				term = event.detail.term;
+				observerType = event.detail.newType;
+			}
+		);
+
+		observer.addEventListener(
+			'peerConnected',
+			(event: ObserverPeerConnectedEvent) => (connectedPeerCount = event.detail.peerCount)
+		);
+		observer.addEventListener(
+			'peerDisconnected',
+			(event: ObserverPeerDisconnectedEvent) =>
+				(connectedPeerCount = event.detail.peerCount)
+		);
+
+		observer.addEventListener('newLogEntry', (event: NewLogEntryEvent) => {
+			processNewMove(event.detail.entry);
 		});
 
-		observer.addEventListener('peerConnected', (event: any) => (connectedPeerCount = event.detail.peerCount));
-		observer.addEventListener('peerDisconnected', (event: any) => (connectedPeerCount = event.detail.peerCount));
-
-		observer.addEventListener('newLogEntry', (event: any) => {
-			processNewMove(event.detail!.entry);
-		});
-
-		observer.addEventListener('newLogEntries', (e: any) => {
+		observer.addEventListener('newLogEntries', (e: NewLogEntriesEvent) => {
 			for (const entry of e.detail.entries) {
 				processNewMove(entry);
 			}
@@ -115,7 +124,7 @@
 	<h1 class="text-center font-mono text-2xl font-bold text-blue-600">Snake <br /></h1>
 	<!-- LOG DRAWER -->
 	<div
-		class="fixed top-0 right-0 z-2 h-full w-1/3 bg-white px-6 py-3 shadow-lg transition-transform duration-300"
+		class="z-2 fixed right-0 top-0 h-full w-1/3 bg-white px-6 py-3 shadow-lg transition-transform duration-300"
 		style="transform: translateX({drawerOpen ? '0' : '100%'})"
 	>
 		<div class="mb-4 flex items-center justify-between">
@@ -144,7 +153,7 @@
 	</div>
 	<!-- SHADOW BEHIND THE LOG DRAWER -->
 	<div
-		class="fixed inset-0 z-1 bg-gray-300 opacity-50 transition-opacity duration-300"
+		class="z-1 fixed inset-0 bg-gray-300 opacity-50 transition-opacity duration-300"
 		style="opacity: {drawerOpen ? '0.5' : '0'}; pointer-events: {drawerOpen ? 'auto' : 'none'}"
 	></div>
 

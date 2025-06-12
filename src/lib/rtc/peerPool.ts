@@ -1,18 +1,23 @@
-import type { Serializable } from '$lib/types';
-import { PeerConnection } from './peerConnection';
+import type { Message } from '$lib/consensus/message';
+import { TypedEventTarget, type Serializable } from '$lib/types';
+import { PeerConnection, type NewMessageEvent } from './peerConnection';
 import type { newOfferEvent, Signaler } from './signaler';
 
-// TODO all the events should be typed!!
-// ======== events ========
-// newPeerConnected
-// peerDisconnectedEvent
-// newMessage
+
+interface PeerPoolEventMap {
+	"newMessage": NewMessageEvent;
+	"peerConnected": CustomEvent<{ peerId: string; }>;
+	"peerDisconnected": CustomEvent<{ peerId: string; }>;
+}
+
+export type PeerPoolPeerConnectedEvent = PeerPoolEventMap["peerConnected"]
+export type PeerPoolPeerDisconnectedEvent = PeerPoolEventMap["peerDisconnected"]
 
 interface PeerMap {
 	[peerId: string]: PeerConnection;
 }
 
-export class PeerPool extends EventTarget {
+export class PeerPool extends TypedEventTarget<PeerPoolEventMap> {
 	private ownPeerId: string;
 	private signaler: Signaler;
 	private peers: PeerMap;
@@ -58,11 +63,11 @@ export class PeerPool extends EventTarget {
 
 	public close() {
 		Object.values(this.peers).forEach((con) => {
-			console.log("closing connection with peer", con);
-			con.close()
-		}
-	);
-	this.peers = {}
+			console.log('closing connection with peer', con);
+			con.close();
+		});
+		// TODO: Improve teardown
+		this.peers = {};
 	}
 
 	private getNewRoomMemberHandler() {

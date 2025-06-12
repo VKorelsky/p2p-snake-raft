@@ -1,16 +1,29 @@
+import type { Message } from '$lib/consensus/message';
+import { TypedEventTarget } from '$lib/types';
 import { rtcConfig } from '../config/local';
 import type { newAnswerEvent, newIceCandidateEvent, Signaler } from './signaler';
 
-// TODO TYPES
-// events defined
-// "connectionEstablished"
-// "connectionFailed"
-// "iceCandidateSent"
-// "iceCandidateReceived"
-// "newMessage"
-// "disconnected"
+interface PeerConnectionMap {
+	"newMessage": CustomEvent<{
+		peerId: string;
+		message: Message;
+	}>;
+	"disconnected": CustomEvent<{ peerId: string; }>;
+	"connectionEstablished": CustomEvent<{ peerId: string; }>;
+	"connectionFailed": CustomEvent<{ peerId: string; }>;
+	"iceCandidateSent": CustomEvent<{ peerId: string; candidate: RTCIceCandidate | null; }>;
+	"iceCandidateReceived": CustomEvent<{ peerId: string; candidate: RTCIceCandidateInit | null; }>;
+}
 
-export class PeerConnection extends EventTarget {
+export type NewMessageEvent = PeerConnectionMap["newMessage"];
+type DisconnectedEvent = PeerConnectionMap["disconnected"];
+type ConnectionEstablishedEvent = PeerConnectionMap["connectionEstablished"];
+type ConnectionFailedEvent = PeerConnectionMap["connectionFailed"];
+type IceCandidateSentEvent = PeerConnectionMap["iceCandidateSent"];
+type IceCandidateReceivedEvent = PeerConnectionMap["iceCandidateReceived"];
+
+
+export class PeerConnection extends TypedEventTarget<PeerConnectionMap> {
 	private selfId: string;
 	private peerId: string;
 	private connection: RTCPeerConnection;
@@ -68,7 +81,7 @@ export class PeerConnection extends EventTarget {
 		this.dataChannel.addEventListener('open', () => {});
 
 		this.dataChannel.addEventListener('message', (event: MessageEvent) => {
-			const newMessageEvent = new CustomEvent('newMessage', {
+			const newMessageEvent: NewMessageEvent = new CustomEvent('newMessage', {
 				detail: {
 					peerId: this.peerId,
 					message: event.data
@@ -118,7 +131,7 @@ export class PeerConnection extends EventTarget {
 		this.connection.addEventListener('connectionstatechange', () => {
 			const connectionState = this.connection.connectionState;
 			if (connectionState === 'connected') {
-				const connectionEstablishedEvent = new CustomEvent('connectionEstablished', {
+				const connectionEstablishedEvent: ConnectionEstablishedEvent = new CustomEvent('connectionEstablished', {
 					detail: {
 						peerId: this.peerId
 					}
@@ -128,7 +141,7 @@ export class PeerConnection extends EventTarget {
 			}
 
 			if (connectionState === 'failed') {
-				const connectionFailedEvent = new CustomEvent('connectionFailed', {
+				const connectionFailedEvent: ConnectionFailedEvent = new CustomEvent('connectionFailed', {
 					detail: {
 						peerId: this.peerId
 					}
@@ -138,7 +151,8 @@ export class PeerConnection extends EventTarget {
 			}
 
 			if (connectionState === 'closed' || connectionState === 'disconnected') {
-				const disconnectedEvent = new CustomEvent('disconnected', {
+				const disconnectedEvent: DisconnectedEvent
+				 = new CustomEvent('disconnected', {
 					detail: {
 						peerId: this.peerId
 					}
@@ -162,7 +176,7 @@ export class PeerConnection extends EventTarget {
 				this.signaler.sendIceCandidate(this.peerId, event.candidate);
 
 				// Dispatch iceCandidateSent event
-				const iceCandidateSentEvent = new CustomEvent('iceCandidateSent', {
+				const iceCandidateSentEvent: IceCandidateSentEvent = new CustomEvent('iceCandidateSent', {
 					detail: {
 						peerId: this.peerId,
 						candidate: event.candidate
@@ -188,7 +202,7 @@ export class PeerConnection extends EventTarget {
 				await this.connection.addIceCandidate(event.newIceCandidate);
 
 				// Dispatch iceCandidateReceived event
-				const iceCandidateReceivedEvent = new CustomEvent('iceCandidateReceived', {
+				const iceCandidateReceivedEvent: IceCandidateReceivedEvent = new CustomEvent('iceCandidateReceived', {
 					detail: {
 						peerId: this.peerId,
 						candidate: event.newIceCandidate

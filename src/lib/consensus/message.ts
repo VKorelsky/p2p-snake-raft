@@ -1,7 +1,8 @@
 import type { Serializable } from '$lib/types';
 import type { ObservedLogEntry } from './logObserver';
 
-// TODO move to zod or protobuf probably instead of everything OOP
+export type Message = AppendEntryMessage | AppendEntryResponse | RequestElectionMessage | RequestElectionResponse | InstallSnapshotMessage | InstallSnapshotResponse | RequestAppendMessage | string
+
 export class AppendEntryMessage implements Serializable {
 	constructor(
 		public term: number,
