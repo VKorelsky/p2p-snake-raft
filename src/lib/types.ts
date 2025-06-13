@@ -9,7 +9,7 @@ export interface Serializable {
 export type Stringifiable = {
 	toString(): string;
 };
-export abstract class TypedEventTarget<EventMap extends { [K in keyof EventMap]: Event }> extends EventTarget {
+export abstract class TypedEventTarget<EventMap extends Record<keyof EventMap, Event>> extends EventTarget {
 	addEventListener<K extends keyof EventMap>(
 		type: K,
 		listener: (this: this, ev: EventMap[K]) => void,

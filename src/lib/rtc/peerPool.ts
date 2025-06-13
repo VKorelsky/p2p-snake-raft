@@ -1,7 +1,6 @@
-import type { Message } from '$lib/consensus/message';
 import { TypedEventTarget, type Serializable } from '$lib/types';
-import { PeerConnection, type NewMessageEvent } from './peerConnection';
-import type { newOfferEvent, Signaler } from './signaler';
+import { PeerConnection, type NewMessageEvent, type ConnectionEstablishedEvent, type ConnectionFailedEvent, type ConnectionDisconnectedEvent, type IceCandidateSentEvent, type IceCandidateReceivedEvent } from './peerConnection';
+import type { NewOfferEvent, Signaler } from './signaler';
 
 
 interface PeerPoolEventMap {
@@ -79,7 +78,7 @@ export class PeerPool extends TypedEventTarget<PeerPoolEventMap> {
 	}
 
 	private getNewOfferHandler() {
-		return async (event: newOfferEvent) => {
+		return async (event: NewOfferEvent) => {
 			const offer = new RTCSessionDescription(event.offer);
 			const connection = this.createNewConnection(event.fromPeerId);
 			this.peers[event.fromPeerId] = connection;
@@ -90,8 +89,7 @@ export class PeerPool extends TypedEventTarget<PeerPoolEventMap> {
 	private createNewConnection(otherPeerId: string) {
 		const connection = new PeerConnection(this.ownPeerId, otherPeerId, this.signaler);
 
-		// TODO type the whole event listener thing etc
-		connection.addEventListener('connectionEstablished', (event: any) => {
+		connection.addEventListener('connectionEstablished', (event: ConnectionEstablishedEvent) => {
 			console.log(`Connected to peer ${event.detail.peerId}`);
 			const connection = event.target as PeerConnection;
 			this.peers[event.detail.peerId] = connection;
@@ -103,11 +101,11 @@ export class PeerPool extends TypedEventTarget<PeerPoolEventMap> {
 			this.dispatchEvent(newPeerConnectedEvent);
 		});
 
-		connection.addEventListener('connectionFailed', (event: any) => {
+		connection.addEventListener('connectionFailed', (event: ConnectionFailedEvent) => {
 			console.log(`Connection failed with peer ${event.detail.peerId}`);
 		});
 
-		connection.addEventListener('disconnected', (event: any) => {
+		connection.addEventListener('disconnected', (event: ConnectionDisconnectedEvent) => {
 			console.log(`Disconnected from peer ${event.detail.peerId}`);
 			delete this.peers[event.detail.peerId];
 
@@ -118,7 +116,7 @@ export class PeerPool extends TypedEventTarget<PeerPoolEventMap> {
 			this.dispatchEvent(peerDisconnectedEvent);
 		});
 
-		connection.addEventListener('newMessage', (event: any) => {
+		connection.addEventListener('newMessage', (event: NewMessageEvent) => {
 			const data = event.detail;
 
 			const newMessageEvent = new CustomEvent('newMessage', {
@@ -131,11 +129,11 @@ export class PeerPool extends TypedEventTarget<PeerPoolEventMap> {
 			this.dispatchEvent(newMessageEvent);
 		});
 
-		connection.addEventListener('iceCandidateSent', (event: any) => {
+		connection.addEventListener('iceCandidateSent', (event: IceCandidateSentEvent) => {
 			console.log(`ICE candidate sent to peer ${event.detail.peerId}`);
 		});
 
-		connection.addEventListener('iceCandidateReceived', (event: any) => {
+		connection.addEventListener('iceCandidateReceived', (event: IceCandidateReceivedEvent) => {
 			console.log(`ICE candidate received from peer ${event.detail.peerId}`);
 		});
 

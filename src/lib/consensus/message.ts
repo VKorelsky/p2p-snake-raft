@@ -145,15 +145,6 @@ export class InstallSnapshotResponse implements Serializable {
 	}
 }
 
-// TBD
-// a new node joining a cluster will ask its leader for a snapshot
-export class RequestSnapshotMessage implements Serializable {
-	// TBD, not part of the original spec
-	toJson(): string {
-		return JSON.stringify({ type: 'RequestSnapshotMessage' });
-	}
-}
-
 // A client message asking the leader to write a message to the log //
 export class RequestAppendMessage implements Serializable {
 	constructor(public msg: string) {

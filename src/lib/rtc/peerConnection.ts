@@ -1,7 +1,7 @@
 import type { Message } from '$lib/consensus/message';
 import { TypedEventTarget } from '$lib/types';
 import { rtcConfig } from '../config/local';
-import type { newAnswerEvent, newIceCandidateEvent, Signaler } from './signaler';
+import type { NewAnswerEvent, NewIceCandidateEvent, Signaler } from './signaler';
 
 interface PeerConnectionMap {
 	"newMessage": CustomEvent<{
@@ -16,11 +16,11 @@ interface PeerConnectionMap {
 }
 
 export type NewMessageEvent = PeerConnectionMap["newMessage"];
-type DisconnectedEvent = PeerConnectionMap["disconnected"];
-type ConnectionEstablishedEvent = PeerConnectionMap["connectionEstablished"];
-type ConnectionFailedEvent = PeerConnectionMap["connectionFailed"];
-type IceCandidateSentEvent = PeerConnectionMap["iceCandidateSent"];
-type IceCandidateReceivedEvent = PeerConnectionMap["iceCandidateReceived"];
+export type ConnectionDisconnectedEvent = PeerConnectionMap["disconnected"];
+export type ConnectionEstablishedEvent = PeerConnectionMap["connectionEstablished"];
+export type ConnectionFailedEvent = PeerConnectionMap["connectionFailed"];
+export type IceCandidateSentEvent = PeerConnectionMap["iceCandidateSent"];
+export type IceCandidateReceivedEvent = PeerConnectionMap["iceCandidateReceived"];
 
 
 export class PeerConnection extends TypedEventTarget<PeerConnectionMap> {
@@ -151,7 +151,7 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionMap> {
 			}
 
 			if (connectionState === 'closed' || connectionState === 'disconnected') {
-				const disconnectedEvent: DisconnectedEvent
+				const disconnectedEvent: ConnectionDisconnectedEvent
 				 = new CustomEvent('disconnected', {
 					detail: {
 						peerId: this.peerId
@@ -162,8 +162,8 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionMap> {
 			}
 		});
 
-		this.connection.addEventListener('icecandidateerror', (event) => {
-			// console.log('ICE candidate error:', event);
+		this.connection.addEventListener('icecandidateerror', (event: RTCPeerConnectionIceErrorEvent) => {
+			console.log('ICE candidate error:', event);
 		});
 
 		this.connection.addEventListener('iceconnectionstatechange', (event) => {
@@ -188,7 +188,7 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionMap> {
 	}
 
 	private getNewAnswerHandler() {
-		return async (event: newAnswerEvent) => {
+		return async (event: NewAnswerEvent) => {
 			if (event.fromPeerId === this.peerId) {
 				const remotePeerDescription = new RTCSessionDescription(event.answer);
 				await this.connection.setRemoteDescription(remotePeerDescription);
@@ -197,7 +197,7 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionMap> {
 	}
 
 	private getNewIceCandidateHandler() {
-		return async (event: newIceCandidateEvent) => {
+		return async (event: NewIceCandidateEvent) => {
 			if (event.fromPeerId === this.peerId) {
 				await this.connection.addIceCandidate(event.newIceCandidate);
 
