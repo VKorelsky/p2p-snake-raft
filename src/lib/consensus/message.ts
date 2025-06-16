@@ -1,7 +1,15 @@
 import type { Serializable } from '$lib/types';
 import type { ObservedLogEntry } from './logObserver';
 
-export type Message = AppendEntryMessage | AppendEntryResponse | RequestElectionMessage | RequestElectionResponse | InstallSnapshotMessage | InstallSnapshotResponse | RequestAppendMessage | string
+export type Message =
+	| AppendEntryMessage
+	| AppendEntryResponse
+	| RequestElectionMessage
+	| RequestElectionResponse
+	| InstallSnapshotMessage
+	| InstallSnapshotResponse
+	| RequestAppendMessage
+	| string;
 
 export class AppendEntryMessage implements Serializable {
 	constructor(
@@ -126,8 +134,8 @@ export class InstallSnapshotResponse implements Serializable {
 		public term: number,
 		public lastIncludedIndex: number,
 		public lastInstallTimestamp: number,
-		public success: boolean,
-	){
+		public success: boolean
+	) {
 		this.term = term;
 		this.lastIncludedIndex = lastIncludedIndex;
 		this.lastInstallTimestamp = lastInstallTimestamp;

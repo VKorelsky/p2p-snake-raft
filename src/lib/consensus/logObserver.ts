@@ -1,5 +1,9 @@
 import type { NewMessageEvent } from '$lib/rtc/peerConnection';
-import { PeerPool, type PeerPoolPeerConnectedEvent, type PeerPoolPeerDisconnectedEvent } from '$lib/rtc/peerPool';
+import {
+	PeerPool,
+	type PeerPoolPeerConnectedEvent,
+	type PeerPoolPeerDisconnectedEvent
+} from '$lib/rtc/peerPool';
 import { Signaler } from '$lib/rtc/signaler';
 import { TypedEventTarget, type Serializable } from '$lib/types';
 import {
@@ -55,12 +59,12 @@ type LogObserverType = 'LEADER' | 'FOLLOWER' | 'CANDIDATE';
 
 interface LogObserverEventMap {
 	// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-	"ready": CustomEvent<{}>;
-	"newLogEntry": CustomEvent<{ entry: string }>;
-	"newLogEntries": CustomEvent<{ entries: string[] }>;
-	"observerStateChange": CustomEvent<{ term: number; newType: LogObserverType }>;
-	"peerConnected": CustomEvent<{ peerCount: number }>;
-	"peerDisconnected": CustomEvent<{ peerCount: number }>;
+	ready: CustomEvent<{}>;
+	newLogEntry: CustomEvent<{ entry: string }>;
+	newLogEntries: CustomEvent<{ entries: string[] }>;
+	observerStateChange: CustomEvent<{ term: number; newType: LogObserverType }>;
+	peerConnected: CustomEvent<{ peerCount: number }>;
+	peerDisconnected: CustomEvent<{ peerCount: number }>;
 }
 
 export type ClusterReadyEvent = LogObserverEventMap['ready'];
@@ -112,9 +116,10 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 	private minClusterSize = 3;
 
 	// INITIAL SNAPSHOT STATE
-	private logThreshold = 5;
+	private logThreshold = 15;
 	private lastSnapshotIndex = 0;
 	private lastSnapshotTerm = 0;
+	private logOffset = 0;
 
 	public constructor(electionTimeoutMs: number) {
 		super();
@@ -155,7 +160,7 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 				this.start();
 			}
 
-			const dispatch: PeerConnectedEvent = new CustomEvent('peerConnected', {
+			const dispatch: ObserverPeerConnectedEvent = new CustomEvent('peerConnected', {
 				detail: {
 					peerCount: this.nbPeers - 1
 				}
@@ -306,7 +311,7 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 						parsedMessage.leaderId,
 						parsedMessage.lastIncludedIndex,
 						parsedMessage.lastIncludedTerm,
-						parsedMessage.state
+						parsedMessage.state,
 					);
 					this.handleInstallSnapshotRequest(fromPeerId, installSnapshotMsg);
 					break;
@@ -342,7 +347,7 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 				for (const followerId of Object.keys(this.followerState)) {
 					const follower = this.followerState[followerId];
 
-					if (this.log.length - 1 === follower.idxNextEntryToAppend) {
+					if (this.getLastGlobalIndex() === follower.idxNextEntryToAppend) {
 						this.appendToFollowerLog(followerId, follower.idxNextEntryToAppend);
 					}
 				}
@@ -404,7 +409,6 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 			followerState.idxLastEntryAppended = message.lastIncludedIndex;
 			followerState.idxNextEntryToAppend = message.lastIncludedIndex + 1;
 			followerState.lastAppendMessageTimestamp = message.lastInstallTimestamp;
-			console.log('LOG AFTER SLICE ', this.log.slice(this.lastSnapshotIndex));
 		}
 	}
 
@@ -491,10 +495,6 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 			}
 		}
 
-		console.log('last applied index ', this.idxLastApplied);
-		console.log('last replicated index ', this.idxLastReplicated);
-		console.log('LOG ', this.log);
-
 		console.log(`[OBSERVER] SENDING APPEND ENTRY RESPONSE to leader with id ${this.leaderId}`);
 		const msg = new AppendEntryResponse(this.currentTerm, true);
 		this.peerPool.sendMessage(this.leaderId, msg);
@@ -536,8 +536,9 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 			// log entry successfully appended to the log of the follower
 			// At this point, the idxNextEntryToAppend currently points to the entry that was *just* appended in the follower log
 			const idxEntry = followerState.idxNextEntryToAppend;
+			const globalLastIndex = this.getLastGlobalIndex();
 
-			if (idxEntry === this.log.length) {
+			if (idxEntry === globalLastIndex + 1) {
 				// we are getting a response to an empty heartbeat, so no need to update anything
 				return;
 			}
@@ -550,36 +551,23 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 					- Dispatch a message with the committed entry.
 				- Update the last committed entry index.
 			*/
-			const entry = this.log[idxEntry]!;
+			const entry = this.getLogEntryByGlobalIndex(idxEntry);
+			if (!entry) {
+				console.warn(`Missing entry at index ${idxEntry}`);
+				return;
+			}
 
 			// the first entry in the log is null
-			if (entry) {
-				entry.acks += 1;
+			entry.acks += 1;
 
-				if (!entry.committed && entry.acks >= this.getQuorumSize()) {
-					entry.commit();
-					this.idxLastReplicated = idxEntry;
-					this.applyEntry(entry.entry);
-					// dispatching the message is equivalent to applying the entry to the state machine
-					this.idxLastApplied = idxEntry;
-					// on receipt of the appendEntryResponse,
-					if (this.idxLastReplicated > this.lastSnapshotIndex + this.logThreshold) {
-						const payload = {
-							lastIncludedTerm: this.currentTerm,
-							lastIncludedIndex: this.idxLastReplicated,
-							state: [...this.log]
-						};
-
-						this.lastSnapshotIndex = this.idxLastReplicated;
-						this.lastSnapshotTerm = this.currentTerm;
-						console.log('LEADER WRITING SNAPSHOT');
-						console.log('LOG BEFORE ', this.log);
-						// TODO: consider removing last snapshot before creating new one
-						// risks slowing down the operation.
-						// or maybe clear the entire indexedDB store on startup?
-						await writeSnapshot(payload);
-					}
-				}
+			if (!entry.committed && entry.acks >= this.getQuorumSize()) {
+				entry.commit();
+				this.idxLastReplicated = idxEntry;
+				this.applyEntry(entry.entry);
+				// dispatching the message is equivalent to applying the entry to the state machine
+				this.idxLastApplied = idxEntry;
+				// on receipt of the appendEntryResponse,
+				await this.maybeSnapshotAndTruncate();
 			}
 
 			/*
@@ -594,18 +582,9 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 				After incrementing, check if the follower is behind the last appended entry.
 				If so, send the next entry.
 			*/
-			if (this.log.length - 1 >= followerState.idxNextEntryToAppend) {
+			if (followerState.idxNextEntryToAppend < globalLastIndex) {
 				this.appendToFollowerLog(fromPeerId, followerState.idxNextEntryToAppend);
 			}
-		} else {
-			/* 
-				Log inconsistency, catch up the peer
-				- Find the first divergent index by decrementing followerState.idxLastEntryToAppend
-				- And sending the message
-			*/
-
-			followerState.idxNextEntryToAppend -= 1;
-			this.appendToFollowerLog(fromPeerId, followerState.idxNextEntryToAppend);
 		}
 	}
 
@@ -764,12 +743,9 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 	}
 
 	private dispatchObserverStateEvent() {
-		const event = new CustomEvent(
-			'observerStateChange',
-			{
-				detail: { term: this.currentTerm, newType: this.type }
-			}
-		);
+		const event = new CustomEvent('observerStateChange', {
+			detail: { term: this.currentTerm, newType: this.type }
+		});
 
 		console.log('DISPATCHING observerStateChange EVENT');
 		this.dispatchEvent(event);
@@ -818,6 +794,8 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 	}
 
 	private async sendHeartbeats() {
+		const globalLastIndex = this.getLastGlobalIndex();
+		console.log("GLOBAL LAST INDEX ", globalLastIndex)
 		// this loops the follower state object of the leader
 		for (const followerId of Object.keys(this.followerState)) {
 			const follower = this.followerState[followerId];
@@ -827,38 +805,34 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 				continue;
 			}
 
-			console.log('FOLLOWER ID ', followerId);
-			console.log('snapshot index ', this.lastSnapshotIndex);
-			console.log('idxNextEntryToAppend ', follower.idxNextEntryToAppend);
 			if (follower.idxNextEntryToAppend <= this.lastSnapshotIndex) {
-				// TODO: decide based on the follower's next entry index whether to append to their log
-				// or if their nextEntry is <= lastSnapshotIndex, then send an installSnapshot RPC instead
-				const snapshot = await readSnapshot(`${this.lastSnapshotIndex}-${this.lastSnapshotTerm}`);
-				if (!snapshot) continue;
-				console.log('[OBSERVER] SENDING LATEST SNAPSHOT TO FOLLOWER ID: ', followerId);
+				const snapshot = await readSnapshot();
+				if (snapshot) {
+					console.log('[OBSERVER] SENDING LATEST SNAPSHOT TO FOLLOWER ID: ', followerId);
 
-				const { lastIncludedIndex, lastIncludedTerm, state } = snapshot;
-				const snapshotPayload = {
-					term: this.currentTerm,
-					leaderId: this.ownId as string,
-					lastIncludedIndex,
-					lastIncludedTerm,
-					state
-				};
+					const { lastIncludedIndex, lastIncludedTerm, state } = snapshot;
+					const snapshotPayload = {
+						term: this.currentTerm,
+						leaderId: this.ownId as string,
+						lastIncludedIndex,
+						lastIncludedTerm,
+						state,
+					};
 
-				this.sendSnapshotMessage(followerId, snapshotPayload);
-				continue;
+					this.sendSnapshotMessage(followerId, snapshotPayload);
+					continue;
+				}
 			}
 
-			if (follower.idxNextEntryToAppend < this.log.length) {
+			if (follower.idxNextEntryToAppend <= globalLastIndex) {
 				this.appendToFollowerLog(followerId, follower.idxNextEntryToAppend);
 				continue;
 			}
 
 			// if follower is not up to date, the heartbeat will behave like a retry
 			const prevIndex = follower.idxNextEntryToAppend - 1;
-			const prevEntry = this.log[prevIndex];
-			const prevTerm = prevEntry ? prevEntry.term : this.currentTerm;
+      const prevEntry = this.getLogEntryByGlobalIndex(prevIndex);
+			const prevTerm = prevEntry ? prevEntry.term : this.lastSnapshotTerm;
 
 			this.sendHeartbeat(followerId, prevIndex, prevTerm);
 		}
@@ -867,18 +841,19 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 	private appendToFollowerLog(followerId: ClusterMemberId, entryIndex: number) {
 		this.followerState[followerId].lastAppendMessageTimestamp = performance.now();
 
-		const currentEntry = this.log[entryIndex]!.entry;
+		const entryObject = this.getLogEntryByGlobalIndex(entryIndex);
+    if (!entryObject) throw new Error(`No entry at ${entryIndex}`);
 
 		const prevIndex = entryIndex - 1;
-		const prevEntry = this.log[prevIndex];
-		const prevTerm = prevEntry ? prevEntry.term : this.currentTerm;
+    const prevEntry = this.getLogEntryByGlobalIndex(prevIndex);
+    const prevTerm = prevEntry ? prevEntry.term : this.currentTerm;
 
 		const msg = new AppendEntryMessage(
 			this.currentTerm,
 			this.ownId!,
 			prevIndex,
 			prevTerm,
-			currentEntry,
+			entryObject.entry,
 			this.idxLastApplied
 		);
 
@@ -891,7 +866,7 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 			payload.leaderId,
 			payload.lastIncludedIndex,
 			payload.lastIncludedTerm,
-			payload.state
+			payload.state,
 		);
 
 		this.peerPool.sendMessage(followerId, msg);
@@ -917,4 +892,36 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 		});
 		this.dispatchEvent(dispatch);
 	}
+
+	private async maybeSnapshotAndTruncate(): Promise<void> {
+    if (this.idxLastReplicated <= this.lastSnapshotIndex + this.logThreshold) return;
+    const payload = {
+      lastIncludedIndex: this.idxLastReplicated,
+      lastIncludedTerm: this.currentTerm,
+      state: [...this.log],
+    };
+    await writeSnapshot(payload);
+    this.log = [];
+		this.logOffset = payload.lastIncludedIndex + 1;
+    this.lastSnapshotIndex = payload.lastIncludedIndex;
+    this.lastSnapshotTerm = payload.lastIncludedTerm;
+  }
+
+	private getLastGlobalIndex(): number {
+		return this.logOffset + this.log.length - 1;
+	}
+
+	private globalToLocalIndex(globalIndex: number): number | null {
+		const localIndex = globalIndex - this.logOffset;
+		if (localIndex < 0 || localIndex >= this.log.length) {
+			return null
+		}
+		return localIndex;
+	}
+
+	private getLogEntryByGlobalIndex(globalIndex: number): ObservedLogEntry<string> | null {
+		const localIndex = this.globalToLocalIndex(globalIndex);
+		return localIndex !== null ? this.log[localIndex] : null;
+	}
+
 }

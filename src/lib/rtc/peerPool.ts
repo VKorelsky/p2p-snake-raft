@@ -39,6 +39,7 @@ export class PeerPool extends TypedEventTarget<PeerPoolEventMap> {
 	}
 
 	public getOpenPeers(): PeerMap {
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
 		return Object.fromEntries(Object.entries(this.peers).filter(([_, peer]) => peer.isOpen()));
 	}
 

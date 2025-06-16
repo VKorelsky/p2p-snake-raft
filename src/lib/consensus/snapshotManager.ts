@@ -1,86 +1,68 @@
 import type { ObservedLogEntry } from "./logObserver";
 
-const DB_NAME    = 'raftDB';
+const DB_NAME = 'raftDB';
 const STORE_NAME = 'snapshots';
 const DB_VERSION = 1;
+const SNAPSHOT_KEY = 'latest';
 
-export interface SnapshotPayload {
+interface SnapshotRecord {
   lastIncludedIndex: number;
   lastIncludedTerm: number;
   state: (ObservedLogEntry<string> | null)[];
 }
 
-export type StoredSnapshot = SnapshotPayload & {
-  id: string;
-  timestamp: number;
-};
+type StoredSnapshot = SnapshotRecord & { key: string; timestamp: number };
 
 function openSnapshotDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
-        const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+        const store = db.createObjectStore(STORE_NAME, { keyPath: 'key' });
         store.createIndex('byTimestamp', 'timestamp');
       }
     };
-
     request.onsuccess = () => resolve(request.result);
-    request.onerror   = () => reject(request.error);
+    request.onerror = () => reject(request.error);
   });
 }
 
-export async function writeSnapshot(
-  payload: SnapshotPayload
-): Promise<void> {
+export async function writeSnapshot(payload: SnapshotRecord): Promise<void> {
+  let mergedState
+  const existing = await readSnapshot();
+  if (existing && payload.lastIncludedIndex > existing.lastIncludedIndex) {
+    mergedState = existing.state.concat(payload.state)
+  } else {
+    mergedState = payload.state;
+  }
+  
+  const record: StoredSnapshot = {
+    key: SNAPSHOT_KEY,
+    lastIncludedIndex: payload.lastIncludedIndex,
+    lastIncludedTerm: payload.lastIncludedTerm,
+    state: mergedState,
+    timestamp: Date.now()
+  };
+
   const db = await openSnapshotDB();
   return new Promise((resolve, reject) => {
-    const tx    = db.transaction(STORE_NAME, 'readwrite');
+    const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
-
-    const id = `${payload.lastIncludedIndex}-${payload.lastIncludedTerm}`;
-    const record: StoredSnapshot = {
-      ...payload,
-      id,
-      timestamp: Date.now(),
-    };
-
     store.put(record);
     tx.oncomplete = () => resolve();
-    tx.onerror    = () => reject(tx.error);
+    tx.onerror = () => reject(tx.error);
   });
 }
 
-export async function readLatestSnapshot(): Promise<StoredSnapshot | null> {
+export async function readSnapshot(): Promise<StoredSnapshot | null> {
   const db = await openSnapshotDB();
   return new Promise((resolve, reject) => {
-    const tx    = db.transaction(STORE_NAME, 'readonly');
+    const tx = db.transaction(STORE_NAME, 'readonly');
     const store = tx.objectStore(STORE_NAME);
-    const idx   = store.index('byTimestamp');
-
-    const req = idx.openCursor(null, 'prev');
-    req.onsuccess = () => {
-      const cursor = req.result;
-      resolve(cursor ? (cursor.value as StoredSnapshot) : null);
-    };
+    const req = store.get(SNAPSHOT_KEY);
+    req.onsuccess = () => resolve(req.result as StoredSnapshot | null);
     req.onerror = () => reject(req.error);
   });
 }
 
-
-export async function readSnapshot(
-  id: string
-): Promise<StoredSnapshot | null> {
-  const db = await openSnapshotDB();
-  return new Promise((resolve, reject) => {
-    const tx    = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const req   = store.get(id);
-    req.onsuccess = () => {
-      resolve((req.result as StoredSnapshot) ?? null);
-    };
-    req.onerror = () => reject(req.error);
-  });
-}

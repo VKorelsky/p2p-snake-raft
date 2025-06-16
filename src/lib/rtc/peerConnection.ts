@@ -3,7 +3,7 @@ import { TypedEventTarget } from '$lib/types';
 import { rtcConfig } from '../config/local';
 import type { NewAnswerEvent, NewIceCandidateEvent, Signaler } from './signaler';
 
-interface PeerConnectionMap {
+interface PeerConnectionEventMap {
 	"newMessage": CustomEvent<{
 		peerId: string;
 		message: Message;
@@ -15,15 +15,15 @@ interface PeerConnectionMap {
 	"iceCandidateReceived": CustomEvent<{ peerId: string; candidate: RTCIceCandidateInit | null; }>;
 }
 
-export type NewMessageEvent = PeerConnectionMap["newMessage"];
-export type ConnectionDisconnectedEvent = PeerConnectionMap["disconnected"];
-export type ConnectionEstablishedEvent = PeerConnectionMap["connectionEstablished"];
-export type ConnectionFailedEvent = PeerConnectionMap["connectionFailed"];
-export type IceCandidateSentEvent = PeerConnectionMap["iceCandidateSent"];
-export type IceCandidateReceivedEvent = PeerConnectionMap["iceCandidateReceived"];
+export type NewMessageEvent = PeerConnectionEventMap["newMessage"];
+export type ConnectionDisconnectedEvent = PeerConnectionEventMap["disconnected"];
+export type ConnectionEstablishedEvent = PeerConnectionEventMap["connectionEstablished"];
+export type ConnectionFailedEvent = PeerConnectionEventMap["connectionFailed"];
+export type IceCandidateSentEvent = PeerConnectionEventMap["iceCandidateSent"];
+export type IceCandidateReceivedEvent = PeerConnectionEventMap["iceCandidateReceived"];
 
 
-export class PeerConnection extends TypedEventTarget<PeerConnectionMap> {
+export class PeerConnection extends TypedEventTarget<PeerConnectionEventMap> {
 	private selfId: string;
 	private peerId: string;
 	private connection: RTCPeerConnection;

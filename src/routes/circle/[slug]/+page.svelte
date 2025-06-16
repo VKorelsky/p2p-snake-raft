@@ -42,7 +42,7 @@
 
 		observer.addEventListener('newLogEntries', (e: NewLogEntriesEvent) => {
 			for (const entry of e.detail.entries) {
-				processNewMove(entry);
+				snakeMoves.push(entry as Move);
 			}
 		});
 
