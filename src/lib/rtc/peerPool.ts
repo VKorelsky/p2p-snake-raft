@@ -66,7 +66,6 @@ export class PeerPool extends TypedEventTarget<PeerPoolEventMap> {
 			console.log('closing connection with peer', con);
 			con.close();
 		});
-		// TODO: Improve teardown
 		this.peers = {};
 	}
 
