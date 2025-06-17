@@ -213,7 +213,6 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 		each node is going to wait until the number of peers is a certain amount then set it's election timeout
 	*/
 	private start() {
-		console.log('RUNNING START as ', this.type);
 		this.resetElectionTimeout();
 	}
 
@@ -374,8 +373,11 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 			return;
 		}
 
+		this.resetElectionTimeout();
+
 		this.currentTerm = message.term;
-		this.log = [...message.state];
+		this.log = [];
+		this.logOffset = message.lastIncludedIndex + 1;
 		this.lastSnapshotIndex = message.lastIncludedIndex;
 		this.lastSnapshotTerm = message.lastIncludedTerm;
 		this.idxLastApplied = message.lastIncludedIndex;
@@ -390,7 +392,7 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 
 		this.peerPool.sendMessage(fromPeerId, msg);
 
-		const entries = this.log.filter((entry) => entry !== null).map((entry) => entry.entry);
+		const entries = [...message.state].filter((entry) => entry !== null).map((entry) => entry.entry);
 		this.applyEntries(entries);
 	}
 
@@ -404,6 +406,8 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 			return;
 		}
 
+		this.resetElectionTimeout();
+
 		if (message.success) {
 			const followerState = this.followerState[fromPeerId];
 			followerState.idxLastEntryAppended = message.lastIncludedIndex;
@@ -412,7 +416,7 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 		}
 	}
 
-	private handleAppendEntryMessage(fromPeerId: string, message: AppendEntryMessage) {
+	private async handleAppendEntryMessage(fromPeerId: string, message: AppendEntryMessage) {
 		// check the term, if I am on an older term, update and transition to follower
 		// TODO can probably handle both the case where I am a candidate or a follower in this one
 		if (message.term < this.currentTerm) {
@@ -438,6 +442,7 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 		console.log(
 			`[OBSERVER] Received AppendEntry from ${message.leaderId}. Resetting the election timeout`
 		);
+		console.log("LOG OFFSET ", this.logOffset);
 		this.resetElectionTimeout();
 		/*
 			When the cluster first initializes, the leader id is not set.
@@ -450,7 +455,7 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 
 		// here I am a follower of the current leader
 		// first I need to check if the previousLogEntry in the message matches mine
-		const prevLogEntry = this.log[message.prevLogIndex];
+		const prevLogEntry = this.getLogEntryByGlobalIndex(message.prevLogIndex);
 		const prevLogEntryTerm = prevLogEntry ? prevLogEntry.term : this.currentTerm;
 
 		if (prevLogEntryTerm != message.prevLogTerm) {
@@ -460,17 +465,23 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 			return;
 		}
 
+		console.log('FOLLOWER LOG ', this.log);
+		console.log('SNAPSHOT INDEX ', this.lastSnapshotIndex);
+		console.log('GLOBAL LAST IDX ', this.getLastGlobalIndex());
+
 		// how to update the idx of the last replicated entry?
 		if (message.newLogEntry) {
 			const newEntry = new ObservedLogEntry(message.newLogEntry, this.currentTerm);
 			const idxNewEntry = message.prevLogIndex + 1;
+			// gotta calculate the local idx based on this global entry before inserting
+			console.log('NEW LOG ENTRY ', message.toJson());
 
 			/* 
 			Two cases here 
 				- Append: this entry is new, so it's index will be outside my bounds
 				- Overwrite: my logs have diverged, and so I am overwriting an older entry
 		*/
-			if (idxNewEntry >= this.log.length) {
+			if (idxNewEntry >= this.getLastGlobalIndex() + 1) {
 				// appending
 				this.log.push(newEntry);
 			} else {
@@ -484,8 +495,9 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 		}
 
 		while (this.idxLastApplied !== this.idxLastReplicated) {
+			// last applied here will be the global last
 			const idxToApply = this.idxLastApplied + 1;
-			const entry = this.log[idxToApply]!;
+			const entry = this.getLogEntryByGlobalIndex(idxToApply);
 
 			if (entry && !entry.committed) {
 				entry.commit();
@@ -495,6 +507,7 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 			}
 		}
 
+		await this.maybeSnapshotAndTruncate()
 		console.log(`[OBSERVER] SENDING APPEND ENTRY RESPONSE to leader with id ${this.leaderId}`);
 		const msg = new AppendEntryResponse(this.currentTerm, true);
 		this.peerPool.sendMessage(this.leaderId, msg);
@@ -529,7 +542,7 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 		}
 
 		const followerState = this.followerState[fromPeerId];
-
+		
 		// In the case of a heartbeat, the follower is going to be up to date
 		// this means that the index of the entry will be equal to the last entry in the leader log
 		if (message.success) {
@@ -601,8 +614,8 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 		this.nbVotes = 1;
 		this.resetElectionTimeout();
 
-		const idxLastEntry = this.log.length - 1;
-		const lastEntry = this.log[idxLastEntry];
+		const idxLastEntry = this.getLastGlobalIndex();
+		const lastEntry = this.getLogEntryByGlobalIndex(idxLastEntry);
 
 		// the first entry has no term, so we should start like this
 		const lastEntryTerm = lastEntry ? lastEntry.term : this.currentTerm;
@@ -635,12 +648,13 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 			this.dispatchObserverStateEvent();
 		}
 
-		const lastEntry = this.log[this.log.length - 1];
+		const globalLastIndex = this.getLastGlobalIndex();
+		const lastEntry = this.getLogEntryByGlobalIndex(globalLastIndex);
 		const lastEntryTerm = lastEntry ? lastEntry.term : this.currentTerm;
 
 		const isCandidateLogUpToDate =
 			(message.termLastLogEntry === lastEntryTerm &&
-				message.idxLastLogEntry >= this.log.length - 1) ||
+				message.idxLastLogEntry >= globalLastIndex) ||
 			lastEntryTerm > message.termLastLogEntry;
 
 		const voteCanBeGranted = this.votedFor === '' || this.votedFor === message.candidateId;
@@ -691,7 +705,7 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 	}
 
 	private transitionTo(type: LogObserverType, context: { newLeaderId?: ClusterMemberId } = {}) {
-		console.log(`[OBSERVER] Transitioning from ${this.type} to ${type}`, this);
+		// console.log(`[OBSERVER] Transitioning from ${this.type} to ${type}`, this);
 		// reset variables that should be fresh at the start of a new term
 		this.votedFor = '';
 		this.followerState = {};
@@ -713,14 +727,14 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 					);
 
 					this.followerState[peer] = {
-						idxNextEntryToAppend: this.log.length, // initialized to leader last log index + 1
+						idxNextEntryToAppend: this.getLastGlobalIndex() + 1, // initialized to leader last log index + 1
 						idxLastEntryAppended: 0,
 						lastAppendMessageTimestamp: 0
 					};
 
 					// TODO the last log entry may not be set and this is the cause of much grief since the term is null
-					const lastEntryIndex = this.log.length - 1;
-					const lastEntry = this.log[lastEntryIndex];
+					const lastEntryIndex = this.getLastGlobalIndex();
+					const lastEntry = this.getLogEntryByGlobalIndex(lastEntryIndex);
 					const lastEntryTerm = lastEntry ? lastEntry.term : this.currentTerm;
 
 					this.sendHeartbeat(peer, lastEntryIndex, lastEntryTerm);
@@ -743,7 +757,7 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 	}
 
 	private dispatchObserverStateEvent() {
-		const event = new CustomEvent('observerStateChange', {
+		const event: ObserverStateChangeEvent = new CustomEvent('observerStateChange', {
 			detail: { term: this.currentTerm, newType: this.type }
 		});
 
@@ -795,11 +809,16 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 
 	private async sendHeartbeats() {
 		const globalLastIndex = this.getLastGlobalIndex();
-		console.log("GLOBAL LAST INDEX ", globalLastIndex)
+		console.log("GLOBAL LAST INDEX ", globalLastIndex);
+		console.log("LEADER LOG ", this.log);
+		console.log("LEADER LOG OFFSET ", this.logOffset);
 		// this loops the follower state object of the leader
 		for (const followerId of Object.keys(this.followerState)) {
 			const follower = this.followerState[followerId];
 			const timeSinceLastAppendMsg = performance.now() - follower.lastAppendMessageTimestamp;
+			console.log('FOLLOWER ID ', followerId);
+			console.log('IDX LAST ENTRY APPENDED ', follower.idxLastEntryAppended);
+			console.log('IDX NEXT ENTRY TO APPEND ', follower.idxNextEntryToAppend);
 
 			if (timeSinceLastAppendMsg < this.heartbeatIntervalMs) {
 				continue;
@@ -895,6 +914,7 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 
 	private async maybeSnapshotAndTruncate(): Promise<void> {
     if (this.idxLastReplicated <= this.lastSnapshotIndex + this.logThreshold) return;
+		console.log(`[OBSERVER] ${this.ownId} WRITING SNAPSHOT`);
     const payload = {
       lastIncludedIndex: this.idxLastReplicated,
       lastIncludedTerm: this.currentTerm,
