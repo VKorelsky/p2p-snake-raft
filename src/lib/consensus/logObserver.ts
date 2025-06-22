@@ -2,7 +2,8 @@ import type { NewMessageEvent } from '$lib/rtc/peerConnection';
 import {
 	PeerPool,
 	type PeerPoolPeerConnectedEvent,
-	type PeerPoolPeerDisconnectedEvent
+	type PeerPoolPeerDisconnectedEvent,
+	type NewMessageEventListener,
 } from '$lib/rtc/peerPool';
 import { Signaler } from '$lib/rtc/signaler';
 import { TypedEventTarget, type Serializable } from '$lib/types';
@@ -64,7 +65,8 @@ interface LogObserverEventMap {
 	newLogEntries: CustomEvent<{ entries: string[] }>;
 	observerStateChange: CustomEvent<{ term: number; newType: LogObserverType }>;
 	peerConnected: CustomEvent<{ peerCount: number }>;
-	peerDisconnected: CustomEvent<{ peerCount: number }>;
+	peerDisconnected: CustomEvent<{ peerCount: number; peerId: string; }>;
+	error: ErrorEvent;
 }
 
 export type ClusterReadyEvent = LogObserverEventMap['ready'];
@@ -73,6 +75,9 @@ export type NewLogEntriesEvent = LogObserverEventMap['newLogEntries'];
 export type ObserverStateChangeEvent = LogObserverEventMap['observerStateChange'];
 export type ObserverPeerConnectedEvent = LogObserverEventMap['peerConnected'];
 export type ObserverPeerDisconnectedEvent = LogObserverEventMap['peerDisconnected'];
+
+type PeerConnectedEventListener = (event: PeerPoolPeerConnectedEvent) => void;
+type PeerDisconnectedEventListener = (event: PeerPoolPeerDisconnectedEvent) => void;
 
 interface SnapshotPayload {
 	term: number;
@@ -121,8 +126,16 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 	private lastSnapshotTerm = 0;
 	private logOffset = 0;
 
+	private boundPeerConnectedHandler: PeerConnectedEventListener;
+	private boundPeerDisconnectedHandler: PeerDisconnectedEventListener;
+	private boundNewMessageHandler: NewMessageEventListener;
+
 	public constructor(electionTimeoutMs: number) {
 		super();
+
+		this.boundPeerConnectedHandler = this.peerConnectedHandler.bind(this);
+		this.boundPeerDisconnectedHandler = this.peerDisconnectedHandler.bind(this);
+		this.boundNewMessageHandler = this.newMessageHandler.bind(this);
 
 		// SIGNALER
 		// TODO remove the hardcoded roomID
@@ -131,61 +144,17 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 		this.signaler.onReady(() => {
 			this.signaler.onConnect((sessionIdentifier) => (this.ownId = sessionIdentifier));
 			this.signaler.onConnectError((err) => console.error(err));
+			this.signaler.onDisconnect((reason) => {
+				console.warn(`[SIGNALER] ${this.ownId} disconnected from server. Reason: ${reason}`);
+				this.dispatchErrorEvent(new Error(`${this.ownId} disconnected from server`), '[OBSERVER]')
+			});
 		});
 
 		// PEER POOL
 		this.peerPool = new PeerPool(this.signaler);
-		this.peerPool.addEventListener('peerConnected', (event: PeerPoolPeerConnectedEvent) => {
-			this.nbPeers += 1;
-
-			if (this.nbPeers >= this.minClusterSize) {
-				console.log('[OBSERVER] Minimum cluster size reached. Starting election process.');
-
-				const clusterReadyEvent: ClusterReadyEvent = new CustomEvent('ready', {
-					detail: {}
-				});
-				this.dispatchEvent(clusterReadyEvent);
-
-				// check if observer is a leader, then add the new peer to their follower state
-				const peerId = event.detail.peerId;
-
-				if (this.type === 'LEADER' && !this.followerState[peerId]) {
-					this.followerState[peerId] = {
-						idxNextEntryToAppend: 1,
-						idxLastEntryAppended: 0,
-						lastAppendMessageTimestamp: 0
-					};
-				}
-
-				this.start();
-			}
-
-			const dispatch: ObserverPeerConnectedEvent = new CustomEvent('peerConnected', {
-				detail: {
-					peerCount: this.nbPeers - 1
-				}
-			});
-
-			this.dispatchEvent(dispatch);
-		});
-
-		this.peerPool.addEventListener('peerDisconnected', (event: PeerPoolPeerDisconnectedEvent) => {
-			this.nbPeers -= 1;
-			if (this.type === 'LEADER') {
-				delete this.followerState[event.detail.peerId];
-			}
-
-			const dispatch: ObserverPeerDisconnectedEvent = new CustomEvent('peerDisconnected', {
-				detail: {
-					peerCount: this.nbPeers - 1
-				}
-			});
-			this.dispatchEvent(dispatch);
-		});
-
-		this.peerPool.addEventListener('newMessage', (event: NewMessageEvent) => {
-			this.processIncomingMessage(event.detail.peerId, event.detail.message as string);
-		});
+		this.peerPool.addEventListener('peerConnected', this.boundPeerConnectedHandler);
+		this.peerPool.addEventListener('peerDisconnected', this.boundPeerDisconnectedHandler);
+		this.peerPool.addEventListener('newMessage', this.boundNewMessageHandler);
 
 		// INITIAL NODE STATE
 		this.type = 'FOLLOWER';
@@ -217,7 +186,14 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 	}
 
 	public leave(): void {
-		console.log('[OBSERVER] disconnecting from the signaler...');
+		console.log(`[OBSERVER] ${this.ownId} leaving the POOL`);
+
+		clearTimeout(this.electionTimeout);
+	  clearInterval(this.heartbeatInterval);
+
+		this.peerPool.removeEventListener('peerConnected', this.boundPeerConnectedHandler);
+		this.peerPool.removeEventListener('peerDisconnected', this.boundPeerDisconnectedHandler);
+		this.peerPool.removeEventListener('newMessage', this.boundNewMessageHandler);
 
 		if (!this.signaler) {
 			console.log('Not connected, nothing to disconnect from');
@@ -417,6 +393,10 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 	}
 
 	private async handleAppendEntryMessage(fromPeerId: string, message: AppendEntryMessage) {
+		if (!this.peerPool.getOpenPeers()[fromPeerId]) {
+			console.warn(`[OBSERVER] Received AppendEntry from disconnected peer ${fromPeerId}. Ignoring.`);
+			return;
+		}
 		// check the term, if I am on an older term, update and transition to follower
 		// TODO can probably handle both the case where I am a candidate or a follower in this one
 		if (message.term < this.currentTerm) {
@@ -456,7 +436,7 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 		// here I am a follower of the current leader
 		// first I need to check if the previousLogEntry in the message matches mine
 		const prevLogEntry = this.getLogEntryByGlobalIndex(message.prevLogIndex);
-		const prevLogEntryTerm = prevLogEntry ? prevLogEntry.term : this.currentTerm;
+		const prevLogEntryTerm = prevLogEntry ? prevLogEntry.term : Math.max(this.currentTerm, this.lastSnapshotTerm);
 
 		if (prevLogEntryTerm != message.prevLogTerm) {
 			// divergent log histories
@@ -652,10 +632,15 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 		const lastEntry = this.getLogEntryByGlobalIndex(globalLastIndex);
 		const lastEntryTerm = lastEntry ? lastEntry.term : this.currentTerm;
 
+		// TODO: RE-READ
 		const isCandidateLogUpToDate =
-			(message.termLastLogEntry === lastEntryTerm &&
-				message.idxLastLogEntry >= globalLastIndex) ||
-			lastEntryTerm > message.termLastLogEntry;
+  message.termLastLogEntry > lastEntryTerm ||
+  (message.termLastLogEntry === lastEntryTerm && message.idxLastLogEntry >= globalLastIndex);
+
+		// const isCandidateLogUpToDate =
+		// 	(message.termLastLogEntry === lastEntryTerm &&
+		// 		message.idxLastLogEntry >= globalLastIndex) ||
+		// 	lastEntryTerm > message.termLastLogEntry;
 
 		const voteCanBeGranted = this.votedFor === '' || this.votedFor === message.candidateId;
 
@@ -761,7 +746,7 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 			detail: { term: this.currentTerm, newType: this.type }
 		});
 
-		console.log('DISPATCHING observerStateChange EVENT');
+		// console.log('DISPATCHING observerStateChange EVENT');
 		this.dispatchEvent(event);
 	}
 
@@ -785,6 +770,13 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 
 	private sendHeartbeat(followerId: ClusterMemberId, prevIndex: number, prevTerm: number) {
 		try {
+			if (!this.peerPool.getOpenPeers()[followerId]) {
+				console.warn(`[OBSERVER] Follower ${followerId} is disconnected. Removing from followerState.`);
+				this.dispatchErrorEvent(new Error(`Follower ${followerId} is disconnected`), '[OBSERVER] sendHeartbeat');
+				delete this.followerState[followerId];
+				return;
+			}
+
 			this.followerState[followerId].lastAppendMessageTimestamp = performance.now();
 
 			const msg = new AppendEntryMessage(
@@ -858,25 +850,38 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 	}
 
 	private appendToFollowerLog(followerId: ClusterMemberId, entryIndex: number) {
-		this.followerState[followerId].lastAppendMessageTimestamp = performance.now();
 
-		const entryObject = this.getLogEntryByGlobalIndex(entryIndex);
-    if (!entryObject) throw new Error(`No entry at ${entryIndex}`);
-
-		const prevIndex = entryIndex - 1;
-    const prevEntry = this.getLogEntryByGlobalIndex(prevIndex);
-    const prevTerm = prevEntry ? prevEntry.term : this.currentTerm;
-
-		const msg = new AppendEntryMessage(
-			this.currentTerm,
-			this.ownId!,
-			prevIndex,
-			prevTerm,
-			entryObject.entry,
-			this.idxLastApplied
-		);
-
-		this.peerPool.sendMessage(followerId, msg);
+		try {
+			if (!this.peerPool.getOpenPeers()[followerId]) {
+				console.warn(`[OBSERVER] Follower ${followerId} is disconnected in AppendToFollowerLog`);
+				this.dispatchErrorEvent(new Error(`Follower ${followerId} is disconnected`), '[OBSERVER] Append to follower log');
+				delete this.followerState[followerId];
+				return;
+			}
+	
+			this.followerState[followerId].lastAppendMessageTimestamp = performance.now();
+	
+			const entryObject = this.getLogEntryByGlobalIndex(entryIndex);
+			if (!entryObject) throw new Error(`No entry at ${entryIndex}`);
+	
+			const prevIndex = entryIndex - 1;
+			const prevEntry = this.getLogEntryByGlobalIndex(prevIndex);
+			const prevTerm = prevEntry ? prevEntry.term : this.currentTerm;
+	
+			const msg = new AppendEntryMessage(
+				this.currentTerm,
+				this.ownId!,
+				prevIndex,
+				prevTerm,
+				entryObject.entry,
+				this.idxLastApplied
+			);
+	
+			this.peerPool.sendMessage(followerId, msg);
+		} catch (error) {
+			console.error(`[OBSERVER] Error appending to Follower ${followerId}'s log `, error)
+		}
+		
 	}
 
 	private sendSnapshotMessage(followerId: ClusterMemberId, payload: SnapshotPayload) {
@@ -920,8 +925,12 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
       lastIncludedTerm: this.currentTerm,
       state: [...this.log],
     };
-    await writeSnapshot(payload);
-    this.log = [];
+
+		//TODO: only added leader check to make testing easier with multiple browser instances
+		// Every node should ideally keep a snapshot that they can send to new followers that join in-game
+		if(this.type === 'LEADER') await writeSnapshot(payload);
+    this.resetElectionTimeout();
+		this.log = [];
 		this.logOffset = payload.lastIncludedIndex + 1;
     this.lastSnapshotIndex = payload.lastIncludedIndex;
     this.lastSnapshotTerm = payload.lastIncludedTerm;
@@ -944,4 +953,56 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 		return localIndex !== null ? this.log[localIndex] : null;
 	}
 
+	private peerConnectedHandler(event: PeerPoolPeerConnectedEvent) {
+		this.nbPeers += 1;
+
+		if (this.nbPeers >= this.minClusterSize) {
+			console.log('[OBSERVER] Minimum cluster size reached. Starting election process.');
+
+			const clusterReadyEvent: ClusterReadyEvent = new CustomEvent('ready', {
+				detail: {}
+			});
+			this.dispatchEvent(clusterReadyEvent);
+
+			// check if observer is a leader, then add the new peer to their follower state
+			const peerId = event.detail.peerId;
+
+			if (this.type === 'LEADER' && !this.followerState[peerId]) {
+				this.followerState[peerId] = {
+					idxNextEntryToAppend: 1,
+					idxLastEntryAppended: 0,
+					lastAppendMessageTimestamp: 0
+				};
+			}
+
+			this.start();
+		}
+
+		const dispatch: ObserverPeerConnectedEvent = new CustomEvent('peerConnected', {
+			detail: {
+				peerCount: this.nbPeers - 1
+			}
+		});
+
+		this.dispatchEvent(dispatch);
+	}
+
+	private peerDisconnectedHandler(event: PeerPoolPeerDisconnectedEvent) {
+		this.nbPeers -= 1;
+		if (this.type === 'LEADER') {
+			delete this.followerState[event.detail.peerId];
+		}
+
+		const dispatch: ObserverPeerDisconnectedEvent = new CustomEvent('peerDisconnected', {
+			detail: {
+				peerCount: this.nbPeers - 1,
+				peerId: event.detail.peerId,
+			}
+		});
+		this.dispatchEvent(dispatch);
+	}
+
+	private newMessageHandler(event: NewMessageEvent) {
+		this.processIncomingMessage(event.detail.peerId, event.detail.message as string);
+	}
 }

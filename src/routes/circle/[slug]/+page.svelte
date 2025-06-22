@@ -1,6 +1,12 @@
 <script lang="ts">
-	import LogObserver from '$lib/consensus/logObserver'
-	import type { ObserverStateChangeEvent, ObserverPeerConnectedEvent, ObserverPeerDisconnectedEvent, NewLogEntryEvent, NewLogEntriesEvent  } from '$lib/consensus/logObserver';
+	import LogObserver from '$lib/consensus/logObserver';
+	import type {
+		ObserverStateChangeEvent,
+		ObserverPeerConnectedEvent,
+		ObserverPeerDisconnectedEvent,
+		NewLogEntryEvent,
+		NewLogEntriesEvent
+	} from '$lib/consensus/logObserver';
 	import type { Move } from '$lib/types';
 	import { getRandomDirection, getRandomNumberInRange } from '$lib/utils';
 	import { onDestroy, onMount } from 'svelte';
@@ -18,30 +24,30 @@
 			}
 		});
 
-		observer.addEventListener(
-			'observerStateChange',
-			(event: ObserverStateChangeEvent) => {
-				term = event.detail.term;
-				observerType = event.detail.newType;
-			}
-		);
+		observer.addEventListener('observerStateChange', (event: ObserverStateChangeEvent) => {
+			term = event.detail.term;
+			observerType = event.detail.newType;
+		});
+
+		observer.addEventListener('error', (event: ErrorEvent) => {
+			console.error(`${event.message} ${event.error}`);
+		});
 
 		observer.addEventListener(
 			'peerConnected',
 			(event: ObserverPeerConnectedEvent) => (connectedPeerCount = event.detail.peerCount)
 		);
-		observer.addEventListener(
-			'peerDisconnected',
-			(event: ObserverPeerDisconnectedEvent) =>
-				(connectedPeerCount = event.detail.peerCount)
-		);
+
+		observer.addEventListener('peerDisconnected', (event: ObserverPeerDisconnectedEvent) => {
+			connectedPeerCount = event.detail.peerCount;
+		});
 
 		observer.addEventListener('newLogEntry', (event: NewLogEntryEvent) => {
 			processNewMove(event.detail.entry);
 		});
 
-		observer.addEventListener('newLogEntries', (e: NewLogEntriesEvent) => {
-			for (const entry of e.detail.entries) {
+		observer.addEventListener('newLogEntries', (event: NewLogEntriesEvent) => {
+			for (const entry of event.detail.entries) {
 				snakeMoves.push(entry as Move);
 			}
 		});
@@ -69,6 +75,12 @@
 
 	const disconnect = () => {
 		logObserver.leave();
+		// TODO: Improve
+		clusterReady = false;
+		term = 0;
+		connectedPeerCount = 0;
+		ownId = '';
+		snakeMoves = [];
 	};
 
 	onMount(() => {

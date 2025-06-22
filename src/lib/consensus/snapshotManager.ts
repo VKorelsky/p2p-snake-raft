@@ -29,19 +29,18 @@ function openSnapshotDB(): Promise<IDBDatabase> {
 }
 
 export async function writeSnapshot(payload: SnapshotRecord): Promise<void> {
-  let mergedState
+  let mergeState = true;
   const existing = await readSnapshot();
-  if (existing && payload.lastIncludedIndex > existing.lastIncludedIndex) {
-    mergedState = existing.state.concat(payload.state)
-  } else {
-    mergedState = payload.state;
+  
+  if (payload.state.includes(null)) {
+    mergeState = false;
   }
   
   const record: StoredSnapshot = {
     key: SNAPSHOT_KEY,
     lastIncludedIndex: payload.lastIncludedIndex,
     lastIncludedTerm: payload.lastIncludedTerm,
-    state: mergedState,
+    state: existing && mergeState ? [...existing.state, ...payload.state] : [...payload.state],
     timestamp: Date.now()
   };
 
