@@ -36,7 +36,7 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionEventMap> {
 	private boundNewAnswerHandler: (event: NewAnswerEvent) => void;
 	private boundNewIceCandidateHandler: (event: NewIceCandidateEvent) => Promise<void>;
 	private boundDataChannelMessageHandler: (event: MessageEvent) => void;
-	private boundDataChannelErrorHandeler: (event: RTCErrorEvent) => void;
+	private boundDataChannelErrorHandler: (event: RTCErrorEvent) => void;
 	private boundDataChannelStateChangeHandler: () => void;
 
 	private iceRestartCount = 0;
@@ -47,7 +47,7 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionEventMap> {
 		this.peerId = peerId;
 		this.signaler = signaler;
 		this.connection = new RTCPeerConnection(rtcConfig);
-		
+
 		this.boundConnectionStateChangeHandler = this.connectionStateChangeHandler.bind(this);
 		this.boundIceCandidateErrorHandler = this.iceCandidateErrorHandler.bind(this);
 		this.boundDataChannelEventHandler = this.dataChannelEventHandler.bind(this);
@@ -56,7 +56,7 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionEventMap> {
 		this.boundIceCandidateEventHandler = this.iceCandidateEventHandler.bind(this);
 		this.boundNewAnswerHandler = this.newAnswerHandler.bind(this);
 		this.boundNewIceCandidateHandler = this.newIceCandidateHandler.bind(this);
-		this.boundDataChannelErrorHandeler = this.dataChannelErrorHandler.bind(this);
+		this.boundDataChannelErrorHandler = this.dataChannelErrorHandler.bind(this);
 		this.boundDataChannelStateChangeHandler = this.dataChannelStateChangeHandler.bind(this);
 
 		this.setupConnection();
@@ -81,6 +81,7 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionEventMap> {
 			this.boundIceConnectionStateChangeHandler
 		);
 		this.connection.addEventListener('icecandidate', this.boundIceCandidateEventHandler);
+		this.connection.addEventListener('datachannel', this.boundDataChannelEventHandler);
 	}
 
 	public async initiateFrom(sessionDescription: RTCSessionDescription) {
@@ -89,14 +90,11 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionEventMap> {
 			const answer = await this.connection.createAnswer();
 			await this.connection.setLocalDescription(answer);
 
-			this.connection.addEventListener('datachannel', this.boundDataChannelEventHandler);
 			this.signaler.onNewIceCandidate(this.boundNewIceCandidateHandler);
 			this.signaler.sendAnswer(this.peerId, answer);
 		} catch (error) {
-			console.warn(`[PEERCONNECTION] Failed to send message to peer ${this.peerId}:`, error);
-			const disconnectedEvent = new CustomEvent('disconnected', { detail: { peerId: this.peerId } });
-			this.dispatchEvent(disconnectedEvent);
-			throw error;
+			console.error(`[PEERCONNECTION] Failed to send message to peer ${this.peerId}:`, error);
+			this.dispatchDisconnectedEvent();
 		}
 	}
 
@@ -110,7 +108,7 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionEventMap> {
 			this.dataChannel.addEventListener('open', () => this.boundDataChannelStateChangeHandler);
 			this.dataChannel.addEventListener('close', () => this.boundDataChannelStateChangeHandler);
 			this.dataChannel.addEventListener('message', this.boundDataChannelMessageHandler);
-			this.dataChannel.addEventListener('error', this.boundDataChannelErrorHandeler);
+			this.dataChannel.addEventListener('error', this.boundDataChannelErrorHandler);
 
 			this.signaler.onNewAnswer(this.boundNewAnswerHandler);
 			this.signaler.onNewIceCandidate(this.boundNewIceCandidateHandler);
@@ -123,7 +121,9 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionEventMap> {
 
 	public close() {
 		this.dataChannel?.removeEventListener('message', this.boundDataChannelMessageHandler);
-		this.dataChannel?.removeEventListener('error', this.boundDataChannelErrorHandeler);
+		this.dataChannel?.removeEventListener('error', this.boundDataChannelErrorHandler);
+		this.dataChannel?.removeEventListener('open', this.boundDataChannelStateChangeHandler);
+		this.dataChannel?.removeEventListener('close', this.boundDataChannelStateChangeHandler);
 		this.connection.removeEventListener('datachannel', this.boundDataChannelEventHandler);
 		this.connection.removeEventListener(
 			'connectionstatechange',
@@ -148,16 +148,19 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionEventMap> {
 
 	public sendMessage(message: string) {
 		if (this.connection.connectionState !== 'connected') {
-			const error = new Error(`Connection to peer ${this.peerId} is not connected (state: ${this.connection.connectionState})`);
-			console.warn(`[PEERCONNECTION] ${error.message}`);
+			const error = new Error(
+				`Connection to peer ${this.peerId} is not connected (state: ${this.connection.connectionState})`
+			);
+			console.error(`[PEERCONNECTION] ${error.message}`);
 			throw error;
 		}
 
 		if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
-			const error = new Error(`Data channel to peer ${this.peerId} is not open (state: ${this.dataChannel?.readyState})`);
-			console.warn(`[PEERCONNECTION] ${error.message}`);
-			const disconnectedEvent = new CustomEvent('disconnected', { detail: { peerId: this.peerId } });
-			this.dispatchEvent(disconnectedEvent);
+			const error = new Error(
+				`Data channel to peer ${this.peerId} is not open (state: ${this.dataChannel?.readyState})`
+			);
+			console.error(`[PEERCONNECTION] ${error.message}`);
+			this.dispatchDisconnectedEvent();
 			throw error;
 		}
 
@@ -170,11 +173,13 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionEventMap> {
 	}
 
 	private dataChannelErrorHandler(event: RTCErrorEvent) {
-		console.log('Error on data channel', event);
+		console.error('[PEERCONNECTION] Error on data channel', event.error.errorDetail);
+		this.dataChannel?.close();
 	}
 
 	private iceCandidateErrorHandler(event: RTCPeerConnectionIceErrorEvent) {
-		console.log('ICE candidate error:', event);
+		console.error('[PEERCONNECTION] ICE candidate error :', event.errorText);
+		console.error('[PEERCONNECTION] ICE candidate error code ', event.errorCode);
 	}
 
 	private dataChannelEventHandler(event: RTCDataChannelEvent) {
@@ -185,16 +190,15 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionEventMap> {
 
 	private dataChannelStateChangeHandler() {
 		const state = this.dataChannel?.readyState;
-		console.debug(`[PEERCONNECTION] Data channel state changed to ${state} for peer ${this.peerId}`);
-		
+		console.debug(
+			`[PEERCONNECTION] Data channel state changed to ${state} for peer ${this.peerId}`
+		);
+
 		if (state === 'open') {
 			console.debug(`[PEERCONNECTION] Data channel opened to peer ${this.peerId}`);
-		} else if (state === 'closed') {
+		} else if (state === 'closing' || state === 'closed') {
 			console.warn(`[PEERCONNECTION] Data channel closed for peer ${this.peerId}`);
-			const disconnectedEvent = new CustomEvent('disconnected', {
-				detail: { peerId: this.peerId }
-			});
-			this.dispatchEvent(disconnectedEvent);
+			this.dispatchDisconnectedEvent();
 		}
 	}
 
@@ -210,18 +214,24 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionEventMap> {
 	}
 
 	private iceConnectionStateChangeHandler() {
-		const iceState = this.connection.iceConnectionState
-		console.debug(`[PEERCONNECTION] ICE connection state changed to ${iceState} for peer ${this.peerId}`);		
-		if (iceState === 'failed') {
+		const iceState = this.connection.iceConnectionState;
+		console.debug(
+			`[PEERCONNECTION] ICE connection state changed to ${iceState} for peer ${this.peerId}`
+		);
+		if (iceState === 'failed' || iceState === 'disconnected') {
 			if (this.iceRestartCount < 3) {
-				console.warn(`[PEERCONNECTION] ICE failed. Restarting ICE (attempt ${this.iceRestartCount + 1}/3)`);
+				console.warn(
+					`[PEERCONNECTION] ICE failed. Restarting ICE (attempt ${this.iceRestartCount + 1}/3)`
+				);
 				this.iceRestartCount++;
 				this.connection.restartIce();
 			} else {
 				console.error(`[PEERCONNECTION] Max ICE restarts exceeded for peer ${this.peerId}`);
-				const disconnectedEvent = new CustomEvent('disconnected', { detail: { peerId: this.peerId } });
-				this.dispatchEvent(disconnectedEvent);
+				this.dispatchDisconnectedEvent();
+				this.iceRestartCount = 0;
 			}
+		} else if (iceState === 'closed') {
+			this.dispatchDisconnectedEvent();
 		}
 	}
 
@@ -270,13 +280,8 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionEventMap> {
 
 		if (connectionState === 'closed' || connectionState === 'disconnected') {
 			console.log('[PEERCONNECTION] CONNECTION CLOSED OR DISCONNECTED');
-			const disconnectedEvent: ConnectionDisconnectedEvent = new CustomEvent('disconnected', {
-				detail: {
-					peerId: this.peerId
-				}
-			});
-
-			this.dispatchEvent(disconnectedEvent);
+			this.dispatchDisconnectedEvent();
+			this.close();
 		}
 	}
 
@@ -303,5 +308,12 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionEventMap> {
 			);
 			this.dispatchEvent(iceCandidateReceivedEvent);
 		}
+	}
+
+	private dispatchDisconnectedEvent() {
+		const disconnectedEvent: ConnectionDisconnectedEvent = new CustomEvent('disconnected', {
+			detail: { peerId: this.peerId }
+		});
+		this.dispatchEvent(disconnectedEvent);
 	}
 }

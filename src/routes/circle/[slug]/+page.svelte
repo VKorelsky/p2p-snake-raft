@@ -13,6 +13,7 @@
 	import Snake from '../../../components/Snake.svelte';
 
 	const initLogObserver = (): LogObserver => {
+		console.log('[PAGE] INITIALIZING LOG OBSERVER');
 		const observer = new LogObserver(electionTimeout);
 
 		observer.addEventListener('ready', () => {
@@ -40,6 +41,7 @@
 
 		observer.addEventListener('peerDisconnected', (event: ObserverPeerDisconnectedEvent) => {
 			connectedPeerCount = event.detail.peerCount;
+			console.log(`[PAGE] ${event.detail.peerId} disconnected`)
 		});
 
 		observer.addEventListener('newLogEntry', (event: NewLogEntryEvent) => {
@@ -56,7 +58,7 @@
 	};
 
 	let electionTimeout = $state(getRandomNumberInRange(2000, 6000));
-	let logObserver: LogObserver = $state(initLogObserver());
+	let logObserver: LogObserver | null = $state(null);
 	let connectedPeerCount: number = $state(0);
 	let clusterReady: boolean = $state(false);
 	let observerType: string = $state('');
@@ -69,22 +71,35 @@
 	let autoPlayInterval: number | undefined = $state();
 	let autoPlayStartTime: Date | undefined = $state();
 
+	const createObserver = () => {
+		if (!logObserver) {
+			logObserver = initLogObserver();
+		}
+		return logObserver;
+	};
+
 	const connect = () => {
-		logObserver.connect();
+		createObserver();
+		logObserver?.connect();
 	};
 
 	const disconnect = () => {
-		logObserver.leave();
-		// TODO: Improve
-		clusterReady = false;
-		term = 0;
-		connectedPeerCount = 0;
-		ownId = '';
-		snakeMoves = [];
+		logObserver?.leave();
+		resetState();
 	};
 
+	const resetState = () => {
+		term = 0;
+		snakeMoves = [];
+		observerType = '';
+		logObserver = null;
+		clusterReady = false;
+		connectedPeerCount = 0;
+		electionTimeout = getRandomNumberInRange(2000, 6000);
+	}
+
 	onMount(() => {
-		// do nothing for now, eventually maybe connect to the signaler
+		createObserver();
 	});
 
 	onDestroy(() => {
@@ -126,9 +141,7 @@
 
 	// the only messages I can now send are Game commands
 	const playMove = (move: Move) => {
-		if (logObserver) {
-			logObserver.appendEntry(move);
-		}
+		logObserver?.appendEntry(move);
 	};
 </script>
 
@@ -238,6 +251,7 @@
 
 	<!-- SNAKE -->
 	<div class="m-10">
+		<!-- TODO: Make sure actions in snake component is aware when peer disconnects -->
 		<Snake actions={snakeMoves} onMove={playMove} />
 	</div>
 </div>
