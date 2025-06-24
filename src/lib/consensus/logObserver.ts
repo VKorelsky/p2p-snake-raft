@@ -142,10 +142,6 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 
 		this.signaler.onReady(() => {
 			this.signaler.onConnect((sessionIdentifier) => (this.ownId = sessionIdentifier));
-			this.signaler.onConnectError((err) => console.error(err));
-			this.signaler.onDisconnect((reason) => {
-				console.warn(`[OBSERVER] ${this.ownId} disconnected from SIGNALER. Reason: ${reason}`);
-			});
 			this.signaler.onConnectError((error) => {
 				console.error(`[OBSERVER] Error connecting to SIGNALER ${error}`)
 			})
@@ -428,8 +424,6 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 		console.log(
 			`[OBSERVER] Received AppendEntry from ${message.leaderId}. Resetting the election timeout`
 		);
-		console.log('LOG OFFSET ', this.logOffset);
-		console.log('MESSAGE ', message.toJson());
 		this.resetElectionTimeout();
 
 		// here I am a follower of the current leader
@@ -445,10 +439,6 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 			this.peerPool.sendMessage(this.leaderId, msg);
 			return;
 		}
-
-		console.log('FOLLOWER LOG ', this.log);
-		console.log('SNAPSHOT INDEX ', this.lastSnapshotIndex);
-		console.log('GLOBAL LAST IDX ', this.getLastGlobalIndex());
 
 		// how to update the idx of the last replicated entry?
 		if (message.newLogEntry) {
@@ -489,7 +479,6 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 		}
 
 		await this.maybeSnapshotAndTruncate();
-		console.log('LAST APPLIED IDX ', this.idxLastApplied);
 		console.log(`[OBSERVER] SENDING APPEND ENTRY RESPONSE to leader with id ${this.leaderId}`);
 		const msg = new AppendEntryResponse(this.currentTerm, true);
 		this.peerPool.sendMessage(this.leaderId, msg);
@@ -813,9 +802,6 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 		for (const followerId of Object.keys(this.followerState)) {
 			const follower = this.followerState[followerId];
 			const timeSinceLastAppendMsg = performance.now() - follower.lastAppendMessageTimestamp;
-			console.log('FOLLOWER ID ', followerId);
-			console.log('IDX LAST ENTRY APPENDED ', follower.idxLastEntryAppended);
-			console.log('IDX NEXT ENTRY TO APPEND ', follower.idxNextEntryToAppend);
 
 			if (timeSinceLastAppendMsg < this.heartbeatIntervalMs) {
 				continue;
@@ -975,7 +961,6 @@ export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 					idxLastEntryAppended: 0,
 					lastAppendMessageTimestamp: 0
 				};
-				// TODO: Experimental. remove if necessary
 			} else if (this.type !== 'LEADER') {
 				this.start();
 			}

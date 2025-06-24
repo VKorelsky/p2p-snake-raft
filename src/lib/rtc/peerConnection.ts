@@ -38,6 +38,8 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionEventMap> {
 	private boundDataChannelMessageHandler: (event: MessageEvent) => void;
 	private boundDataChannelErrorHandler: (event: RTCErrorEvent) => void;
 	private boundDataChannelStateChangeHandler: () => void;
+	private boundSignalingStateChangeHandler: (event: Event) => void;
+
 
 	private iceRestartCount = 0;
 
@@ -58,6 +60,7 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionEventMap> {
 		this.boundNewIceCandidateHandler = this.newIceCandidateHandler.bind(this);
 		this.boundDataChannelErrorHandler = this.dataChannelErrorHandler.bind(this);
 		this.boundDataChannelStateChangeHandler = this.dataChannelStateChangeHandler.bind(this);
+		this.boundSignalingStateChangeHandler = this.signalingStateChangeHandler.bind(this);
 
 		this.setupConnection();
 	}
@@ -82,6 +85,10 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionEventMap> {
 		);
 		this.connection.addEventListener('icecandidate', this.boundIceCandidateEventHandler);
 		this.connection.addEventListener('datachannel', this.boundDataChannelEventHandler);
+		this.connection.addEventListener(
+			'signalingstatechange',
+			this.boundSignalingStateChangeHandler
+		);
 	}
 
 	public async initiateFrom(sessionDescription: RTCSessionDescription) {
@@ -307,6 +314,15 @@ export class PeerConnection extends TypedEventTarget<PeerConnectionEventMap> {
 				}
 			);
 			this.dispatchEvent(iceCandidateReceivedEvent);
+		}
+	}
+
+	private signalingStateChangeHandler() {
+		const state = this.connection.signalingState;
+		console.debug(`[PEERCONNECTION] Signaling state changed to ${state} for peer ${this.peerId}`);
+
+		if (state === 'closed') {
+			this.dispatchDisconnectedEvent();
 		}
 	}
 

@@ -49,6 +49,7 @@ export class PeerPool extends TypedEventTarget<PeerPoolEventMap> {
 			this.signaler.onConnect((id) => (this.ownPeerId = id));
 			this.signaler.onNewRoomMember(this.getNewRoomMemberHandler());
 			this.signaler.onNewOffer(this.getNewOfferHandler());
+			this.signaler.onDisconnect((reason) => console.log(`${this.ownPeerId} disconnected from SIGNALER because ${reason}`));
 		});
 	}
 
