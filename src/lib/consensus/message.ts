@@ -1,7 +1,16 @@
 import type { Serializable } from '$lib/types';
 import type { ObservedLogEntry } from './logObserver';
 
-// TODO move to zod or protobuf probably instead of everything OOP
+export type Message =
+	| AppendEntryMessage
+	| AppendEntryResponse
+	| RequestElectionMessage
+	| RequestElectionResponse
+	| InstallSnapshotMessage
+	| InstallSnapshotResponse
+	| RequestAppendMessage
+	| string;
+
 export class AppendEntryMessage implements Serializable {
 	constructor(
 		public term: number,
@@ -93,12 +102,54 @@ export class RequestElectionResponse implements Serializable {
 	}
 }
 
-// TBD
-// a new node joining a cluster will ask its leader for a snapshot
-export class RequestSnapshotMessage implements Serializable {
-	// TBD, not part of the original spec
+export class InstallSnapshotMessage implements Serializable {
+	constructor(
+		public term: number,
+		public leaderId: string,
+		public lastIncludedIndex: number,
+		public lastIncludedTerm: number,
+		public state: (ObservedLogEntry<string> | null)[],
+	) {
+		this.term = term;
+		this.leaderId = leaderId;
+		this.lastIncludedIndex = lastIncludedIndex;
+		this.lastIncludedTerm = lastIncludedTerm;
+		this.state = state;
+	}
+
 	toJson(): string {
-		return JSON.stringify({ type: 'RequestSnapshotMessage' });
+		return JSON.stringify({
+			type: 'InstallSnapshotRequest',
+			term: this.term,
+			leaderId: this.leaderId,
+			lastIncludedIndex: this.lastIncludedIndex,
+			lastIncludedTerm: this.lastIncludedTerm,
+			state: this.state,
+		});
+	}
+}
+
+export class InstallSnapshotResponse implements Serializable {
+	constructor(
+		public term: number,
+		public lastIncludedIndex: number,
+		public lastInstallTimestamp: number,
+		public success: boolean
+	) {
+		this.term = term;
+		this.lastIncludedIndex = lastIncludedIndex;
+		this.lastInstallTimestamp = lastInstallTimestamp;
+		this.success = success;
+	}
+
+	toJson(): string {
+		return JSON.stringify({
+			type: 'InstallSnapshotResponse',
+			term: this.term,
+			lastIncludedIndex: this.lastIncludedIndex,
+			lastInstallTimestamp: this.lastInstallTimestamp,
+			success: this.success
+		});
 	}
 }
 

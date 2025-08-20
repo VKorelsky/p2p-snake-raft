@@ -1,14 +1,20 @@
 <script lang="ts">
-	import { LogObserver } from '$lib/consensus/logObserver';
+	import LogObserver from '$lib/consensus/logObserver';
+	import type {
+		ObserverStateChangeEvent,
+		ObserverPeerConnectedEvent,
+		ObserverPeerDisconnectedEvent,
+		NewLogEntryEvent,
+		NewLogEntriesEvent
+	} from '$lib/consensus/logObserver';
 	import type { Move } from '$lib/types';
 	import { getRandomDirection, getRandomNumberInRange } from '$lib/utils';
 	import { onDestroy, onMount } from 'svelte';
 	import Snake from '../../../components/Snake.svelte';
 
 	const initLogObserver = (): LogObserver => {
-		const observer = new LogObserver(
-			electionTimeout
-		);
+		console.log('[PAGE] INITIALIZING LOG OBSERVER');
+		const observer = new LogObserver(electionTimeout);
 
 		observer.addEventListener('ready', () => {
 			clusterReady = true;
@@ -19,23 +25,40 @@
 			}
 		});
 
-		observer.addEventListener('observerStateChange', (event: any) => {
+		observer.addEventListener('observerStateChange', (event: ObserverStateChangeEvent) => {
 			term = event.detail.term;
 			observerType = event.detail.newType;
 		});
 
-		observer.addEventListener('peerConnected', () => (connectedPeerCount += 1));
-		observer.addEventListener('peerDisconnected', () => (connectedPeerCount -= 1));
+		observer.addEventListener('error', (event: ErrorEvent) => {
+			console.error(`${event.message} ${event.error}`);
+		});
 
-		observer.addEventListener('newLogEntry', (event: any) => {
-			processNewMove(event.detail!.entry);
+		observer.addEventListener(
+			'peerConnected',
+			(event: ObserverPeerConnectedEvent) => (connectedPeerCount = event.detail.peerCount)
+		);
+
+		observer.addEventListener('peerDisconnected', (event: ObserverPeerDisconnectedEvent) => {
+			connectedPeerCount = event.detail.peerCount;
+			console.log(`[PAGE] ${event.detail.peerId} disconnected`)
+		});
+
+		observer.addEventListener('newLogEntry', (event: NewLogEntryEvent) => {
+			processNewMove(event.detail.entry);
+		});
+
+		observer.addEventListener('newLogEntries', (event: NewLogEntriesEvent) => {
+			for (const entry of event.detail.entries) {
+				snakeMoves.push(entry as Move);
+			}
 		});
 
 		return observer;
 	};
 
 	let electionTimeout = $state(getRandomNumberInRange(2000, 6000));
-	let logObserver: LogObserver = $state(initLogObserver());
+	let logObserver: LogObserver | null = $state(null);
 	let connectedPeerCount: number = $state(0);
 	let clusterReady: boolean = $state(false);
 	let observerType: string = $state('');
@@ -48,16 +71,35 @@
 	let autoPlayInterval: number | undefined = $state();
 	let autoPlayStartTime: Date | undefined = $state();
 
+	const createObserver = () => {
+		if (!logObserver) {
+			logObserver = initLogObserver();
+		}
+		return logObserver;
+	};
+
 	const connect = () => {
-		logObserver.connect();
+		createObserver();
+		logObserver?.connect();
 	};
 
 	const disconnect = () => {
-		logObserver.leave();
+		logObserver?.leave();
+		resetState();
 	};
 
+	const resetState = () => {
+		term = 0;
+		snakeMoves = [];
+		observerType = '';
+		logObserver = null;
+		clusterReady = false;
+		connectedPeerCount = 0;
+		electionTimeout = getRandomNumberInRange(2000, 6000);
+	}
+
 	onMount(() => {
-		// do nothing for now, eventually maybe connect to the signaler
+		createObserver();
 	});
 
 	onDestroy(() => {
@@ -73,7 +115,6 @@
 			console.error(`Invalid move received ${move}`);
 			return;
 		}
-
 
 		snakeMoves.push(move);
 	};
@@ -100,9 +141,7 @@
 
 	// the only messages I can now send are Game commands
 	const playMove = (move: Move) => {
-		if (logObserver) {
-			logObserver.appendEntry(move);
-		}
+		logObserver?.appendEntry(move);
 	};
 </script>
 
@@ -110,7 +149,7 @@
 	<h1 class="text-center font-mono text-2xl font-bold text-blue-600">Snake <br /></h1>
 	<!-- LOG DRAWER -->
 	<div
-		class="fixed top-0 right-0 z-2 h-full w-1/3 bg-white px-6 py-3 shadow-lg transition-transform duration-300"
+		class="z-2 fixed right-0 top-0 h-full w-1/3 bg-white px-6 py-3 shadow-lg transition-transform duration-300"
 		style="transform: translateX({drawerOpen ? '0' : '100%'})"
 	>
 		<div class="mb-4 flex items-center justify-between">
@@ -139,7 +178,7 @@
 	</div>
 	<!-- SHADOW BEHIND THE LOG DRAWER -->
 	<div
-		class="fixed inset-0 z-1 bg-gray-300 opacity-50 transition-opacity duration-300"
+		class="z-1 fixed inset-0 bg-gray-300 opacity-50 transition-opacity duration-300"
 		style="opacity: {drawerOpen ? '0.5' : '0'}; pointer-events: {drawerOpen ? 'auto' : 'none'}"
 	></div>
 
@@ -212,6 +251,7 @@
 
 	<!-- SNAKE -->
 	<div class="m-10">
+		<!-- TODO: Make sure actions in snake component is aware when peer disconnects -->
 		<Snake actions={snakeMoves} onMove={playMove} />
 	</div>
 </div>

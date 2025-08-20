@@ -31,6 +31,15 @@
 	};
 
 	let processedSteps = 0;
+  let previousLength = actions.length;
+
+  $effect.pre(() => {
+    if (actions.length < previousLength) {
+      processedSteps = 0;
+      player = { x: 5, y: 5, path: [{ x: 5, y: 5 }] };
+    }
+    previousLength = actions.length;
+  });
 
 	const sketch: Sketch = (p5) => {
 		p5.setup = () => {

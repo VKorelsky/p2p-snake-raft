@@ -1,13 +1,22 @@
-import { PeerPool } from '$lib/rtc/peerPool';
+import type { NewMessageEvent } from '$lib/rtc/peerConnection';
+import {
+	PeerPool,
+	type PeerPoolPeerConnectedEvent,
+	type PeerPoolPeerDisconnectedEvent,
+	type NewMessageEventListener
+} from '$lib/rtc/peerPool';
 import { Signaler } from '$lib/rtc/signaler';
-import type { Serializable } from '$lib/types';
+import { TypedEventTarget, type Serializable } from '$lib/types';
 import {
 	AppendEntryMessage,
 	AppendEntryResponse,
+	InstallSnapshotMessage,
+	InstallSnapshotResponse,
 	RequestAppendMessage,
 	RequestElectionMessage,
 	RequestElectionResponse
 } from './message';
+import { readSnapshot, writeSnapshot } from './snapshotManager';
 
 export class ObservedLogEntry<T> implements Serializable {
 	entry: T;
@@ -46,40 +55,39 @@ export class ObservedLogEntry<T> implements Serializable {
 	}
 }
 
-// Q - how to type the events that are thrown around?
-// take a look at an example
-// addEventListener<K extends keyof RTCPeerConnectionEventMap>(type: K, listener: (this: RTCPeerConnection, ev: RTCPeerConnectionEventMap[K]) => any, options?: boolean | AddEventListenerOptions): void;
-export interface LogObserverEventTarget extends EventTarget {}
+type ClusterMemberId = string;
+type LogObserverType = 'LEADER' | 'FOLLOWER' | 'CANDIDATE';
 
-// events that will be shared with wider world
-interface ObserverEvent<T> extends Event {
-	detail: T;
-	[key: string]: any;
+interface LogObserverEventMap {
+	// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+	ready: CustomEvent<{}>;
+	newLogEntry: CustomEvent<{ entry: string }>;
+	newLogEntries: CustomEvent<{ entries: string[] }>;
+	observerStateChange: CustomEvent<{ term: number; newType: LogObserverType }>;
+	peerConnected: CustomEvent<{ peerCount: number }>;
+	peerDisconnected: CustomEvent<{ peerCount: number; peerId: string }>;
+	error: ErrorEvent;
 }
 
-// newLogEntry
-interface NewLogEntryEvent<T> extends ObserverEvent<{ entry: T }> {}
+export type ClusterReadyEvent = LogObserverEventMap['ready'];
+export type NewLogEntryEvent = LogObserverEventMap['newLogEntry'];
+export type NewLogEntriesEvent = LogObserverEventMap['newLogEntries'];
+export type ObserverStateChangeEvent = LogObserverEventMap['observerStateChange'];
+export type ObserverPeerConnectedEvent = LogObserverEventMap['peerConnected'];
+export type ObserverPeerDisconnectedEvent = LogObserverEventMap['peerDisconnected'];
 
-// observerTypeChanged
-interface ObserverTypeChangeEvent
-	extends ObserverEvent<{
-		term: number;
-		newType: LogObserverType;
-	}> {}
+type PeerConnectedEventListener = (event: PeerPoolPeerConnectedEvent) => void;
+type PeerDisconnectedEventListener = (event: PeerPoolPeerDisconnectedEvent) => void;
 
-// peerConnected
-interface NewPeerConnected extends ObserverEvent<{}> {}
+interface SnapshotPayload {
+	term: number;
+	leaderId: string;
+	lastIncludedIndex: number;
+	lastIncludedTerm: number;
+	state: (ObservedLogEntry<string> | null)[];
+}
 
-// peerDisconnected
-interface PeerDisconnected extends ObserverEvent<{}> {}
-
-// clusterReady i.e election triggered
-interface ClusterReady extends ObserverEvent<{}> {}
-
-type LogObserverType = 'LEADER' | 'FOLLOWER' | 'CANDIDATE';
-type ClusterMemberId = string;
-
-export class LogObserver extends EventTarget {
+export default class LogObserver extends TypedEventTarget<LogObserverEventMap> {
 	private peerPool: PeerPool;
 	private signaler: Signaler;
 
@@ -103,18 +111,30 @@ export class LogObserver extends EventTarget {
 		};
 	};
 
-	// what happens on disconnection?
-
 	private electionTimeoutMs: number;
 	private heartbeatIntervalMs: number;
 	private heartbeatInterval?: number;
 	private electionTimeout?: number;
 
 	private nbPeers = 1; // Current node counts as one peer
-	private minClusterSize = 4;
+	private minClusterSize = 3;
+
+	// INITIAL SNAPSHOT STATE
+	private logThreshold = 15;
+	private lastSnapshotIndex = 0;
+	private lastSnapshotTerm = 0;
+	private logOffset = 0;
+
+	private boundPeerConnectedHandler: PeerConnectedEventListener;
+	private boundPeerDisconnectedHandler: PeerDisconnectedEventListener;
+	private boundNewMessageHandler: NewMessageEventListener;
 
 	public constructor(electionTimeoutMs: number) {
 		super();
+
+		this.boundPeerConnectedHandler = this.peerConnectedHandler.bind(this);
+		this.boundPeerDisconnectedHandler = this.peerDisconnectedHandler.bind(this);
+		this.boundNewMessageHandler = this.newMessageHandler.bind(this);
 
 		// SIGNALER
 		// TODO remove the hardcoded roomID
@@ -122,40 +142,16 @@ export class LogObserver extends EventTarget {
 
 		this.signaler.onReady(() => {
 			this.signaler.onConnect((sessionIdentifier) => (this.ownId = sessionIdentifier));
-			this.signaler.onConnectError((err) => console.error(err));
+			this.signaler.onConnectError((error) => {
+				console.error(`[OBSERVER] Error connecting to SIGNALER ${error}`)
+			})
 		});
 
 		// PEER POOL
 		this.peerPool = new PeerPool(this.signaler);
-		this.peerPool.addEventListener('peerConnected', (event: any) => {
-			this.nbPeers += 1;
-
-			if (this.nbPeers >= this.minClusterSize) {
-				console.log('[OBSERVER] Minimum cluster size reached. Starting election process.');
-
-				const clusterReadyEvent: ClusterReady = new CustomEvent('ready', {
-					detail: {}
-				});
-				this.dispatchEvent(clusterReadyEvent);
-
-				this.start();
-			}
-
-			const dispatch: NewPeerConnected = new CustomEvent('peerConnected', {
-				detail: {}
-			});
-
-			this.dispatchEvent(dispatch);
-		});
-
-		this.peerPool.addEventListener('peerDisconnected', (event: any) => {
-			const dispatch: PeerDisconnected = new CustomEvent('peerDisconnected', { detail: {} });
-			this.dispatchEvent(dispatch);
-		});
-
-		this.peerPool.addEventListener('newMessage', (event: any) => {
-			this.processIncomingMessage(event.detail.peerId, event.detail.message);
-		});
+		this.peerPool.addEventListener('peerConnected', this.boundPeerConnectedHandler);
+		this.peerPool.addEventListener('peerDisconnected', this.boundPeerDisconnectedHandler);
+		this.peerPool.addEventListener('newMessage', this.boundNewMessageHandler);
 
 		// INITIAL NODE STATE
 		this.type = 'FOLLOWER';
@@ -174,6 +170,7 @@ export class LogObserver extends EventTarget {
 	}
 
 	public connect() {
+		console.log('connecting to circle server');
 		this.signaler.connect();
 	}
 
@@ -186,7 +183,14 @@ export class LogObserver extends EventTarget {
 	}
 
 	public leave(): void {
-		console.log('[OBSERVER] disconnecting from the signaler...');
+		console.log(`[OBSERVER] ${this.ownId} leaving the POOL`);
+
+		clearTimeout(this.electionTimeout);
+		clearInterval(this.heartbeatInterval);
+
+		this.peerPool.removeEventListener('peerConnected', this.boundPeerConnectedHandler);
+		this.peerPool.removeEventListener('peerDisconnected', this.boundPeerDisconnectedHandler);
+		this.peerPool.removeEventListener('newMessage', this.boundNewMessageHandler);
 
 		if (!this.signaler) {
 			console.log('Not connected, nothing to disconnect from');
@@ -273,8 +277,25 @@ export class LogObserver extends EventTarget {
 					this.handleRequestAppendMessage(fromPeerId, requestAppendMsg);
 					break;
 				}
-				case 'RequestSnapshotMessage': {
-					// TBD
+				case 'InstallSnapshotRequest': {
+					const installSnapshotMsg = new InstallSnapshotMessage(
+						parsedMessage.term,
+						parsedMessage.leaderId,
+						parsedMessage.lastIncludedIndex,
+						parsedMessage.lastIncludedTerm,
+						parsedMessage.state
+					);
+					this.handleInstallSnapshotRequest(fromPeerId, installSnapshotMsg);
+					break;
+				}
+				case 'InstallSnapshotResponse': {
+					const installSnaphotResponse = new InstallSnapshotResponse(
+						parsedMessage.term,
+						parsedMessage.lastIncludedIndex,
+						parsedMessage.lastInstallTimestamp,
+						parsedMessage.success
+					);
+					this.handleInstallSnapshotResponse(fromPeerId, installSnaphotResponse);
 					break;
 				}
 				default:
@@ -287,7 +308,7 @@ export class LogObserver extends EventTarget {
 	}
 
 	// ================= APPEND ENTRY ==================
-	public appendEntry(entry: string) {
+	public async appendEntry(entry: string) {
 		switch (this.type) {
 			case 'LEADER': {
 				// append to my log
@@ -298,7 +319,7 @@ export class LogObserver extends EventTarget {
 				for (const followerId of Object.keys(this.followerState)) {
 					const follower = this.followerState[followerId];
 
-					if (this.log.length - 1 === follower.idxNextEntryToAppend) {
+					if (this.getLastGlobalIndex() === follower.idxNextEntryToAppend) {
 						this.appendToFollowerLog(followerId, follower.idxNextEntryToAppend);
 					}
 				}
@@ -312,7 +333,6 @@ export class LogObserver extends EventTarget {
 			}
 			case 'CANDIDATE': {
 				throw new Error('Not ready to accept write requests');
-				break;
 			}
 			default: {
 				throw new Error(`Unknown LogObserverType: ${this.type}`);
@@ -320,24 +340,77 @@ export class LogObserver extends EventTarget {
 		}
 	}
 
-	private handleAppendEntryMessage(fromPeerId: string, message: AppendEntryMessage) {
-		// check the term, if I am on an older term, update and transition to follower
-		// TODO can probably handle both the case where I am a candidate or a follower in this one
-		if (message.term > this.currentTerm) {
-			// the cluster has moved on, I should be a follower if I am not already
-			console.log(
-				`[OBSERVER] [APPEND ENTRY MESSAGE] Changing term from ${this.currentTerm} to ${message.term}`
-			);
-			this.currentTerm = message.term;
-			this.transitionTo('FOLLOWER', { newLeaderId: message.leaderId });
+	private async handleInstallSnapshotRequest(fromPeerId: string, message: InstallSnapshotMessage) {
+		if (this.type !== 'FOLLOWER') {
+			return;
 		}
 
+		this.resetElectionTimeout();
+		const payload = { lastIncludedIndex: message.lastIncludedIndex, lastIncludedTerm: message.lastIncludedTerm, state: [...message.state] };
+		await writeSnapshot(payload);
+
+		this.currentTerm = message.term;
+		this.log = [];
+		this.logOffset = message.lastIncludedIndex + 1;
+		this.lastSnapshotIndex = message.lastIncludedIndex;
+		this.lastSnapshotTerm = message.lastIncludedTerm;
+		this.idxLastApplied = message.lastIncludedIndex;
+		this.idxLastReplicated = message.lastIncludedIndex;
+
+		const msg = new InstallSnapshotResponse(
+			this.currentTerm,
+			this.idxLastApplied,
+			performance.now(),
+			true
+		);
+
+		this.peerPool.sendMessage(fromPeerId, msg);
+
+		const entries = [...message.state]
+			.filter((entry) => entry !== null)
+			.map((entry) => entry.entry);
+		this.applyEntries(entries);
+	}
+
+	private handleInstallSnapshotResponse(fromPeerId: string, message: InstallSnapshotResponse) {
+		if (this.type !== 'LEADER') {
+			return;
+		}
+
+		// this.resetElectionTimeout();
+
+		const followerState = this.followerState[fromPeerId];
+		if (message.success) {
+			followerState.idxLastEntryAppended = message.lastIncludedIndex;
+			followerState.idxNextEntryToAppend = message.lastIncludedIndex + 1;
+			followerState.lastAppendMessageTimestamp = message.lastInstallTimestamp;
+		}
+
+		const globalLastIndex = this.getLastGlobalIndex();
+		if (followerState.idxNextEntryToAppend <= globalLastIndex) {
+			this.appendToFollowerLog(fromPeerId, followerState.idxNextEntryToAppend);
+		}
+	}
+
+	private async handleAppendEntryMessage(fromPeerId: string, message: AppendEntryMessage) {
+		if (!this.peerPool.getOpenPeers()[fromPeerId]) {
+			console.warn(
+				`[OBSERVER] Received AppendEntry from disconnected peer ${fromPeerId}. Ignoring.`
+			);
+			return;
+		}
+		// check the term, if I am on an older term, update and transition to follower
+		// TODO can probably handle both the case where I am a candidate or a follower in this one
 		if (message.term < this.currentTerm) {
 			// ignore message, received from an older leader
 			return;
 		}
 
 		switch (this.type) {
+			case 'FOLLOWER':
+				this.currentTerm = message.term;
+				this.transitionTo('FOLLOWER', { newLeaderId: message.leaderId });
+				break;
 			case 'CANDIDATE':
 				this.transitionTo('FOLLOWER', { newLeaderId: message.leaderId });
 				break;
@@ -353,24 +426,17 @@ export class LogObserver extends EventTarget {
 		);
 		this.resetElectionTimeout();
 
-		/*
-			When the cluster first initializes, the leader id is not set.
-			All nodes start as followers and it will happen that they will stay followers until they hear from the first elected leader
-			When they do, they should update their id
-		*/
-		if (!this.leaderId) {
-			this.transitionTo('FOLLOWER', { newLeaderId: message.leaderId });
-		}
-
 		// here I am a follower of the current leader
 		// first I need to check if the previousLogEntry in the message matches mine
-		const prevLogEntry = this.log[message.prevLogIndex];
-		const prevLogEntryTerm = prevLogEntry ? prevLogEntry.term : this.currentTerm;
+		const prevLogEntry = this.getLogEntryByGlobalIndex(message.prevLogIndex);
+		const prevLogEntryTerm = prevLogEntry
+			? prevLogEntry.term
+			: this.currentTerm;
 
 		if (prevLogEntryTerm != message.prevLogTerm) {
 			// divergent log histories
 			const msg = new AppendEntryResponse(this.currentTerm, false);
-			this.peerPool?.sendMessage(this.leaderId, msg);
+			this.peerPool.sendMessage(this.leaderId, msg);
 			return;
 		}
 
@@ -378,13 +444,15 @@ export class LogObserver extends EventTarget {
 		if (message.newLogEntry) {
 			const newEntry = new ObservedLogEntry(message.newLogEntry, this.currentTerm);
 			const idxNewEntry = message.prevLogIndex + 1;
+			// gotta calculate the local idx based on this global entry before inserting
+			console.log('NEW LOG ENTRY ', message.toJson());
 
 			/* 
 			Two cases here 
 				- Append: this entry is new, so it's index will be outside my bounds
 				- Overwrite: my logs have diverged, and so I am overwriting an older entry
 		*/
-			if (idxNewEntry >= this.log.length) {
+			if (idxNewEntry >= this.getLastGlobalIndex() + 1) {
 				// appending
 				this.log.push(newEntry);
 			} else {
@@ -398,25 +466,27 @@ export class LogObserver extends EventTarget {
 		}
 
 		while (this.idxLastApplied !== this.idxLastReplicated) {
+			// last applied here will be the global last
 			const idxToApply = this.idxLastApplied + 1;
-			const entry = this.log[idxToApply]!;
+			const entry = this.getLogEntryByGlobalIndex(idxToApply);
 
-			if (!entry.committed) {
+			if (entry && !entry.committed) {
 				entry.commit();
 				this.applyEntry(entry.entry);
+				// Follower's lastAppliedIndex should only be updated if it received a non-empty appendEntry RPC
+				this.idxLastApplied += 1;
 			}
-
-			this.idxLastApplied += 1;
 		}
 
-		console.log(`[OBSERVER] SENDING APPEND ENTRY RESPONSE to leader with id ${this.leaderId}`)
+		await this.maybeSnapshotAndTruncate();
+		console.log(`[OBSERVER] SENDING APPEND ENTRY RESPONSE to leader with id ${this.leaderId}`);
 		const msg = new AppendEntryResponse(this.currentTerm, true);
-		this.peerPool?.sendMessage(this.leaderId, msg);
+		this.peerPool.sendMessage(this.leaderId, msg);
 	}
 
-	private handleAppendEntryResponse(fromPeerId: string, message: AppendEntryResponse) {
+	private async handleAppendEntryResponse(fromPeerId: string, message: AppendEntryResponse) {
 		if (message.term > this.currentTerm) {
-			// the cluster has moved on, I should be a follower.
+			// the cluster has moved on, I should be a follower
 			console.log(
 				`[OBSERVER] [APPEND ENTRY RESPONSE] Changing term from ${this.currentTerm} to ${message.term}`
 			);
@@ -426,7 +496,7 @@ export class LogObserver extends EventTarget {
 		}
 
 		// I received a response/acknowledgement from some other node in the clusterr
-		this.resetElectionTimeout();
+		// this.resetElectionTimeout();
 
 		if (message.term < this.currentTerm) {
 			// ignore message, the inconsistent follower will eventually catch up
@@ -450,8 +520,9 @@ export class LogObserver extends EventTarget {
 			// log entry successfully appended to the log of the follower
 			// At this point, the idxNextEntryToAppend currently points to the entry that was *just* appended in the follower log
 			const idxEntry = followerState.idxNextEntryToAppend;
+			const globalLastIndex = this.getLastGlobalIndex();
 
-			if (idxEntry === this.log.length) {
+			if (idxEntry === globalLastIndex + 1) {
 				// we are getting a response to an empty heartbeat, so no need to update anything
 				return;
 			}
@@ -464,19 +535,23 @@ export class LogObserver extends EventTarget {
 					- Dispatch a message with the committed entry.
 				- Update the last committed entry index.
 			*/
-			const entry = this.log[idxEntry]!;
+			const entry = this.getLogEntryByGlobalIndex(idxEntry);
+			if (!entry) {
+				console.warn(`Missing entry at index ${idxEntry}`);
+				return;
+			}
 
 			// the first entry in the log is null
-			if (entry) {
-				entry.acks += 1;
+			entry.acks += 1;
 
-				if (!entry.committed && entry.acks >= this.getQuorumSize()) {
-					entry.commit();
-					this.idxLastReplicated = idxEntry;
-					this.applyEntry(entry.entry);
-					// dispatching the message is equivalent to applying the entry to the state machine
-					this.idxLastApplied = idxEntry;
-				}
+			if (!entry.committed && entry.acks >= this.getQuorumSize()) {
+				entry.commit();
+				this.idxLastReplicated = idxEntry;
+				this.applyEntry(entry.entry);
+				// dispatching the message is equivalent to applying the entry to the state machine
+				this.idxLastApplied = idxEntry;
+				// on receipt of the appendEntryResponse,
+				await this.maybeSnapshotAndTruncate();
 			}
 
 			/*
@@ -491,18 +566,9 @@ export class LogObserver extends EventTarget {
 				After incrementing, check if the follower is behind the last appended entry.
 				If so, send the next entry.
 			*/
-			if (this.log.length - 1 >= followerState.idxNextEntryToAppend) {
+			if (followerState.idxNextEntryToAppend <= globalLastIndex) {
 				this.appendToFollowerLog(fromPeerId, followerState.idxNextEntryToAppend);
 			}
-		} else {
-			/* 
-				Log inconsistency, catch up the peer
-				- Find the first divergent index by decrementing followerState.idxLastEntryToAppend
-				- And sending the message
-			*/
-
-			followerState.idxNextEntryToAppend -= 1;
-			this.appendToFollowerLog(fromPeerId, followerState.idxNextEntryToAppend);
 		}
 	}
 
@@ -519,8 +585,8 @@ export class LogObserver extends EventTarget {
 		this.nbVotes = 1;
 		this.resetElectionTimeout();
 
-		const idxLastEntry = this.log.length - 1;
-		const lastEntry = this.log[idxLastEntry];
+		const idxLastEntry = this.getLastGlobalIndex();
+		const lastEntry = this.getLogEntryByGlobalIndex(idxLastEntry);
 
 		// the first entry has no term, so we should start like this
 		const lastEntryTerm = lastEntry ? lastEntry.term : this.currentTerm;
@@ -537,6 +603,7 @@ export class LogObserver extends EventTarget {
 
 	private handleRequestElectionMessage(fromPeerId: string, message: RequestElectionMessage) {
 		console.log(`[OBSERVER] Election requested by peer with id ${fromPeerId}.`);
+		console.log(`[OBSERVER] REQUEST ELECTION MESSAGE ${message.toJson()}`)
 		if (message.term < this.currentTerm) {
 			// ignore, this is a stale node
 			this.denyVote(fromPeerId);
@@ -553,20 +620,21 @@ export class LogObserver extends EventTarget {
 			this.dispatchObserverStateEvent();
 		}
 
-		const lastEntry = this.log[this.log.length - 1];
+		const globalLastIndex = this.getLastGlobalIndex();
+		const lastEntry = this.getLogEntryByGlobalIndex(globalLastIndex);
 		const lastEntryTerm = lastEntry ? lastEntry.term : this.currentTerm;
+		console.log(`[OBSERVER] REQUEST ELECTION LAST ENTRY TERM ${lastEntryTerm}`)
 
 		const isCandidateLogUpToDate =
-			(message.termLastLogEntry === lastEntryTerm &&
-				message.idxLastLogEntry >= this.log.length - 1) ||
-			lastEntryTerm > message.termLastLogEntry;
+			message.termLastLogEntry > lastEntryTerm ||
+			(message.termLastLogEntry === lastEntryTerm && message.idxLastLogEntry >= globalLastIndex);
 
 		const voteCanBeGranted = this.votedFor === '' || this.votedFor === message.candidateId;
 
 		if (isCandidateLogUpToDate && voteCanBeGranted) {
 			console.log(`[OBSERVER] Granting vote to peer with id ${fromPeerId}.`);
 			this.grantVote(message.candidateId);
-			this.resetElectionTimeout();
+			if (this.type !== 'LEADER') this.resetElectionTimeout();
 		} else {
 			console.log(`[OBSERVER] Denying vote to peer with id ${fromPeerId}.`);
 			this.denyVote(message.candidateId);
@@ -582,7 +650,7 @@ export class LogObserver extends EventTarget {
 				`[OBSERVER] [REQUEST ELECTION RESPONSE] Changing term from ${this.currentTerm} to ${message.term}`
 			);
 			this.currentTerm = message.term;
-			this.transitionTo('FOLLOWER', { newLeaderId: '' }); // Unknown leader. We will wait for a heartbeat
+			this.transitionTo('FOLLOWER'); // Unknown leader. We will wait for a heartbeat
 			return;
 		}
 
@@ -608,8 +676,8 @@ export class LogObserver extends EventTarget {
 		this.peerPool.sendMessage(candidateId, new RequestElectionResponse(this.currentTerm, false));
 	}
 
-	private transitionTo(type: LogObserverType, context: { newLeaderId: ClusterMemberId } | {} = {}) {
-		console.log(`[OBSERVER] Transitioning from ${this.type} to ${type}`, this);
+	private transitionTo(type: LogObserverType, context: { newLeaderId?: ClusterMemberId } = {}) {
+		// console.log(`[OBSERVER] Transitioning from ${this.type} to ${type}`, this);
 		// reset variables that should be fresh at the start of a new term
 		this.votedFor = '';
 		this.followerState = {};
@@ -631,16 +699,17 @@ export class LogObserver extends EventTarget {
 					);
 
 					this.followerState[peer] = {
-						idxNextEntryToAppend: this.log.length, // initialized to leader last log index + 1
+						idxNextEntryToAppend: this.getLastGlobalIndex() + 1, // initialized to leader last log index + 1
 						idxLastEntryAppended: 0,
 						lastAppendMessageTimestamp: 0
 					};
 
 					// TODO the last log entry may not be set and this is the cause of much grief since the term is null
-					const lastEntryIndex = this.log.length - 1;
-					const lastEntry = this.log[lastEntryIndex];
+					const lastEntryIndex = this.getLastGlobalIndex();
+					const lastEntry = this.getLogEntryByGlobalIndex(lastEntryIndex);
 					const lastEntryTerm = lastEntry ? lastEntry.term : this.currentTerm;
 
+					this.electionTimeout = undefined;
 					this.sendHeartbeat(peer, lastEntryIndex, lastEntryTerm);
 				});
 				this.setLeaderHeartbeatInterval();
@@ -648,9 +717,8 @@ export class LogObserver extends EventTarget {
 			case 'FOLLOWER':
 				this.type = 'FOLLOWER';
 
-				// this is somewhat ugly
-				if ('newLeaderId' in context) {
-					this.leaderId = context.newLeaderId;
+				if (context['newLeaderId']) {
+					this.leaderId = context.newLeaderId as string;
 				} else {
 					throw new Error('Leader ID must be provided when transitioning to FOLLOWER');
 				}
@@ -662,11 +730,11 @@ export class LogObserver extends EventTarget {
 	}
 
 	private dispatchObserverStateEvent() {
-		const event: ObserverTypeChangeEvent = new CustomEvent('observerStateChange', {
+		const event: ObserverStateChangeEvent = new CustomEvent('observerStateChange', {
 			detail: { term: this.currentTerm, newType: this.type }
 		});
 
-		console.log('SUPPOSEDEDLY DISPATCHING AN EVENT');
+		// console.log('DISPATCHING observerStateChange EVENT');
 		this.dispatchEvent(event);
 	}
 
@@ -689,21 +757,48 @@ export class LogObserver extends EventTarget {
 	}
 
 	private sendHeartbeat(followerId: ClusterMemberId, prevIndex: number, prevTerm: number) {
-		this.followerState[followerId].lastAppendMessageTimestamp = performance.now();
+		try {
+			if (!this.peerPool.getOpenPeers()[followerId]) {
+				console.warn(
+					`[OBSERVER] Follower ${followerId} is disconnected. Removing from followerState.`
+				);
+				this.dispatchErrorEvent(
+					new Error(`Follower ${followerId} is disconnected`),
+					'[OBSERVER] sendHeartbeat'
+				);
+				delete this.followerState[followerId];
+				return;
+			}
 
-		const msg = new AppendEntryMessage(
-			this.currentTerm,
-			this.ownId!,
-			prevIndex,
-			prevTerm,
-			null,
-			this.idxLastApplied
-		);
+			this.followerState[followerId].lastAppendMessageTimestamp = performance.now();
 
-		this.peerPool.sendMessage(followerId, msg);
+			const msg = new AppendEntryMessage(
+				this.currentTerm,
+				this.ownId!,
+				prevIndex,
+				prevTerm,
+				null,
+				this.idxLastApplied
+			);
+
+			this.peerPool.sendMessage(followerId, msg);
+		} catch (error) {
+			console.log(
+				'[OBSERVER] Failed to send heartbeat to follower with id: ',
+				followerId,
+				' error: ',
+				error
+			);
+		}
 	}
 
-	private sendHeartbeats() {
+	private async sendHeartbeats() {
+		// this.resetElectionTimeout();
+		const globalLastIndex = this.getLastGlobalIndex();
+		console.log('GLOBAL LAST INDEX ', globalLastIndex);
+		console.log('LEADER LOG ', this.log);
+		console.log('LEADER LOG OFFSET ', this.logOffset);
+		// this loops the follower state object of the leader
 		for (const followerId of Object.keys(this.followerState)) {
 			const follower = this.followerState[followerId];
 			const timeSinceLastAppendMsg = performance.now() - follower.lastAppendMessageTimestamp;
@@ -712,10 +807,33 @@ export class LogObserver extends EventTarget {
 				continue;
 			}
 
-			// if follower is not up to date, the heartbeat will behave like a retry
+			if (follower.idxNextEntryToAppend <= this.lastSnapshotIndex) {
+				const snapshot = await readSnapshot();
+				if (snapshot) {
+					console.log('[OBSERVER] SENDING LATEST SNAPSHOT TO FOLLOWER ID: ', followerId);
 
+					const { lastIncludedIndex, lastIncludedTerm, state } = snapshot;
+					const snapshotPayload = {
+						term: this.currentTerm,
+						leaderId: this.ownId as string,
+						lastIncludedIndex,
+						lastIncludedTerm,
+						state
+					};
+
+					this.sendSnapshotMessage(followerId, snapshotPayload);
+					continue;
+				}
+			}
+
+			if (follower.idxNextEntryToAppend <= globalLastIndex) {
+				this.appendToFollowerLog(followerId, follower.idxNextEntryToAppend);
+				continue;
+			}
+
+			// if follower is not up to date, the heartbeat will behave like a retry
 			const prevIndex = follower.idxNextEntryToAppend - 1;
-			const prevEntry = this.log[prevIndex];
+			const prevEntry = this.getLogEntryByGlobalIndex(prevIndex);
 			const prevTerm = prevEntry ? prevEntry.term : this.currentTerm;
 
 			this.sendHeartbeat(followerId, prevIndex, prevTerm);
@@ -723,21 +841,47 @@ export class LogObserver extends EventTarget {
 	}
 
 	private appendToFollowerLog(followerId: ClusterMemberId, entryIndex: number) {
-		this.followerState[followerId].lastAppendMessageTimestamp = performance.now();
+		try {
+			if (!this.peerPool.getOpenPeers()[followerId]) {
+				console.warn(`[OBSERVER] Follower ${followerId} is disconnected in AppendToFollowerLog`);
+				delete this.followerState[followerId];
+				return;
+			}
 
-		const currentEntry = this.log[entryIndex]!.entry;
+			this.followerState[followerId].lastAppendMessageTimestamp = performance.now();
 
-		const prevIndex = entryIndex - 1;
-		const prevEntry = this.log[prevIndex];
-		const prevTerm = prevEntry ? prevEntry.term : this.currentTerm;
+			const entryObject = this.getLogEntryByGlobalIndex(entryIndex);
+			if (!entryObject) {
+				console.warn(`[OBSERVER] No entry at ${entryIndex}`)
+				return
+			}
 
-		const msg = new AppendEntryMessage(
-			this.currentTerm,
-			this.ownId!,
-			prevIndex,
-			prevTerm,
-			currentEntry,
-			this.idxLastApplied
+			const prevIndex = entryIndex - 1;
+			const prevEntry = this.getLogEntryByGlobalIndex(prevIndex);
+			const prevTerm = prevEntry ? prevEntry.term : this.currentTerm;
+
+			const msg = new AppendEntryMessage(
+				this.currentTerm,
+				this.ownId!,
+				prevIndex,
+				prevTerm,
+				entryObject.entry,
+				this.idxLastApplied
+			);
+
+			this.peerPool.sendMessage(followerId, msg);
+		} catch (error) {
+			console.error(`[OBSERVER] Error appending to Follower ${followerId}'s log `, error);
+		}
+	}
+
+	private sendSnapshotMessage(followerId: ClusterMemberId, payload: SnapshotPayload) {
+		const msg = new InstallSnapshotMessage(
+			payload.term,
+			payload.leaderId,
+			payload.lastIncludedIndex,
+			payload.lastIncludedTerm,
+			payload.state
 		);
 
 		this.peerPool.sendMessage(followerId, msg);
@@ -755,5 +899,96 @@ export class LogObserver extends EventTarget {
 		});
 
 		this.dispatchEvent(dispatch);
+	}
+
+	private applyEntries(entries: string[]) {
+		const dispatch = new CustomEvent('newLogEntries', {
+			detail: { entries }
+		});
+		this.dispatchEvent(dispatch);
+	}
+
+	private async maybeSnapshotAndTruncate(): Promise<void> {
+		if (this.idxLastReplicated <= this.lastSnapshotIndex + this.logThreshold) return;
+		console.log(`[OBSERVER] ${this.ownId} WRITING SNAPSHOT`);
+		const payload = {
+			lastIncludedIndex: this.idxLastReplicated,
+			lastIncludedTerm: this.currentTerm,
+			state: [...this.log]
+		};
+
+		if (this.type !== 'LEADER') this.resetElectionTimeout();
+		await writeSnapshot(payload);
+		this.log = [];
+		this.logOffset = payload.lastIncludedIndex + 1;
+		this.lastSnapshotIndex = payload.lastIncludedIndex;
+		this.lastSnapshotTerm = payload.lastIncludedTerm;
+	}
+
+	private getLastGlobalIndex(): number {
+		return this.logOffset + this.log.length - 1;
+	}
+
+	private globalToLocalIndex(globalIndex: number): number | null {
+		const localIndex = globalIndex - this.logOffset;
+		if (localIndex < 0 || localIndex >= this.log.length) {
+			return null;
+		}
+		return localIndex;
+	}
+
+	private getLogEntryByGlobalIndex(globalIndex: number): ObservedLogEntry<string> | null {
+		const localIndex = this.globalToLocalIndex(globalIndex);
+		return localIndex !== null ? this.log[localIndex] : null;
+	}
+
+	private peerConnectedHandler(event: PeerPoolPeerConnectedEvent) {
+		this.nbPeers += 1;
+
+		if (this.nbPeers >= this.minClusterSize) {
+			console.log('[OBSERVER] Minimum cluster size reached. Starting election process.');
+
+			const clusterReadyEvent: ClusterReadyEvent = new CustomEvent('ready', {
+				detail: {}
+			});
+			this.dispatchEvent(clusterReadyEvent);
+
+			const peerId = event.detail.peerId;
+
+			if (this.type === 'LEADER' && !this.followerState[peerId]) {
+				this.followerState[peerId] = {
+					idxNextEntryToAppend: 1,
+					idxLastEntryAppended: 0,
+					lastAppendMessageTimestamp: 0
+				};
+			} else if (this.type !== 'LEADER') {
+				this.start();
+			}
+		}
+
+		const dispatch: ObserverPeerConnectedEvent = new CustomEvent('peerConnected', {
+			detail: {
+				peerCount: this.nbPeers - 1
+			}
+		});
+
+		this.dispatchEvent(dispatch);
+	}
+
+	private peerDisconnectedHandler(event: PeerPoolPeerDisconnectedEvent) {
+		this.nbPeers -= 1;
+		delete this.followerState[event.detail.peerId];
+
+		const dispatch: ObserverPeerDisconnectedEvent = new CustomEvent('peerDisconnected', {
+			detail: {
+				peerCount: this.nbPeers - 1,
+				peerId: event.detail.peerId
+			}
+		});
+		this.dispatchEvent(dispatch);
+	}
+
+	private newMessageHandler(event: NewMessageEvent) {
+		this.processIncomingMessage(event.detail.peerId, event.detail.message as string);
 	}
 }

@@ -1,21 +1,43 @@
-import type { Serializable } from '$lib/types';
-import { PeerConnection } from './peerConnection';
-import type { newOfferEvent, Signaler } from './signaler';
+import { TypedEventTarget, type Serializable } from '$lib/types';
+import { PeerConnection, type NewMessageEvent, type ConnectionEstablishedEvent, type ConnectionFailedEvent, type ConnectionDisconnectedEvent, type IceCandidateSentEvent, type IceCandidateReceivedEvent } from './peerConnection';
+import type { NewOfferEvent, Signaler } from './signaler';
 
-// TODO all the events should be typed!!
-// ======== events ========
-// newPeerConnected
-// peerDisconnectedEvent
-// newMessage
+
+interface PeerPoolEventMap {
+	newMessage: NewMessageEvent;
+	peerConnected: CustomEvent<{ peerId: string; }>;
+	peerDisconnected: CustomEvent<{ peerId: string; }>;
+}
+
+export type PeerPoolPeerConnectedEvent = PeerPoolEventMap["peerConnected"]
+export type PeerPoolPeerDisconnectedEvent = PeerPoolEventMap["peerDisconnected"]
+
+export type NewMessageEventListener = (event: NewMessageEvent) => void;
+type ConnectionEstablishedEventListener = (event: ConnectionEstablishedEvent) => void;
+type ConnectionFailedEventListener = (event: ConnectionFailedEvent) => void;
+type ConnectionDisconnectedEventListener = (event: ConnectionDisconnectedEvent) => void;
+type IceCandidateSentEventListener = (event: IceCandidateSentEvent) => void;
+type IceCandidateReceivedEventListener = (event: IceCandidateReceivedEvent) => void;
 
 interface PeerMap {
 	[peerId: string]: PeerConnection;
 }
 
-export class PeerPool extends EventTarget {
+export class PeerPool extends TypedEventTarget<PeerPoolEventMap> {
 	private ownPeerId: string;
 	private signaler: Signaler;
 	private peers: PeerMap;
+	private listenerRegistry: Record<string,{
+    connection: PeerConnection,
+    handlers: {
+      onConnectionEstablished: ConnectionEstablishedEventListener,
+      onConnectionFailed: ConnectionFailedEventListener,
+      onConnectionDisconnected: ConnectionDisconnectedEventListener,
+      onNewMessage: NewMessageEventListener,
+      onIceCandidateSent: IceCandidateSentEventListener,
+      onIceCandidateReceived: IceCandidateReceivedEventListener
+    }
+  }> = {};
 
 	public constructor(signaler: Signaler) {
 		super();
@@ -27,6 +49,7 @@ export class PeerPool extends EventTarget {
 			this.signaler.onConnect((id) => (this.ownPeerId = id));
 			this.signaler.onNewRoomMember(this.getNewRoomMemberHandler());
 			this.signaler.onNewOffer(this.getNewOfferHandler());
+			this.signaler.onDisconnect((reason) => console.log(`${this.ownPeerId} disconnected from SIGNALER because ${reason}`));
 		});
 	}
 
@@ -35,6 +58,7 @@ export class PeerPool extends EventTarget {
 	}
 
 	public getOpenPeers(): PeerMap {
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
 		return Object.fromEntries(Object.entries(this.peers).filter(([_, peer]) => peer.isOpen()));
 	}
 
@@ -42,26 +66,52 @@ export class PeerPool extends EventTarget {
 		Object.values(this.peers).forEach((con) => con.isOpen() && con.sendMessage(message.toJson()));
 	}
 
-	public sendMessage(toPeerId: string, message: Serializable) {
-		if (!(toPeerId in this.peers)) {
-			throw new Error(`No peer found matching the id ${toPeerId}`);
+	public sendMessage(toPeerId: string, message: Serializable, retries = 3) {
+		if (!this.peers[toPeerId]) {
+			console.error(`No peer found matching the id ${toPeerId}`);
+			return;
 		}
 
 		const con = this.peers[toPeerId];
 
 		if (!con.isOpen) {
-			throw new Error(`Connection to peer with id ${toPeerId} is not open`);
+			console.error(`[PEERPOOL] Connection to peer ${toPeerId} is not open`);
+			delete this.peers[toPeerId];
+			delete this.listenerRegistry[toPeerId];
+			this.dispatchPeerDisconnectedEvent(toPeerId);
+			return;
 		}
 
-		con.sendMessage(message.toJson());
+		try {		
+			con.sendMessage(message.toJson());
+		} catch (error) {
+			if (retries > 0) {
+				console.warn(`[PEERPOOL] Retrying message to peer ${toPeerId} (${retries} retries left)`);
+				setTimeout(() => this.sendMessage(toPeerId, message, retries - 1), 500);
+			} else {
+				console.error(`[PEERPOOL] Failed to send message to peer ${toPeerId} after retries:`, error);
+				delete this.peers[toPeerId];
+				delete this.listenerRegistry[toPeerId];
+				this.dispatchPeerDisconnectedEvent(toPeerId);
+			}
+		}
 	}
 
 	public close() {
-		Object.values(this.peers).forEach((con) => {
-			console.log("closing connection with peer", con);
-			con.close()
-		}
-	);
+		for (const [peerId, { connection, handlers }] of Object.entries(this.listenerRegistry)) {
+			console.log(`${this.ownPeerId} DISCONNECTING FROM PEER ID ${peerId}`);
+			connection.removeEventListener('connectionEstablished', handlers.onConnectionEstablished);
+			connection.removeEventListener('connectionFailed', handlers.onConnectionFailed);
+			connection.removeEventListener('disconnected', handlers.onConnectionDisconnected);
+			connection.removeEventListener('newMessage', handlers.onNewMessage);
+			connection.removeEventListener('iceCandidateSent', handlers.onIceCandidateSent);
+			connection.removeEventListener('iceCandidateReceived', handlers.onIceCandidateReceived);
+
+      connection.close();
+    }
+
+    this.listenerRegistry = {};
+		this.peers = {};
 	}
 
 	private getNewRoomMemberHandler() {
@@ -73,7 +123,7 @@ export class PeerPool extends EventTarget {
 	}
 
 	private getNewOfferHandler() {
-		return async (event: newOfferEvent) => {
+		return async (event: NewOfferEvent) => {
 			const offer = new RTCSessionDescription(event.offer);
 			const connection = this.createNewConnection(event.fromPeerId);
 			this.peers[event.fromPeerId] = connection;
@@ -82,11 +132,15 @@ export class PeerPool extends EventTarget {
 	}
 
 	private createNewConnection(otherPeerId: string) {
-		const connection = new PeerConnection(this.ownPeerId, otherPeerId, this.signaler);
+		if (this.peers[otherPeerId]) {
+			console.warn(`[PEERPOOL] Peer ${otherPeerId} already exists in PeerPool`);
+			return this.peers[otherPeerId];
+		}
 
-		// TODO type the whole event listener thing etc
-		connection.addEventListener('connectionEstablished', (event: any) => {
-			console.log(`Connected to peer ${event.detail.peerId}`);
+		const connection = new PeerConnection(this.ownPeerId, otherPeerId, this.signaler);
+		
+		const onConnectionEstablished = (event: ConnectionEstablishedEvent) => {
+			console.log(`[PEERPOOL] Connected to peer ${event.detail.peerId}`);
 			const connection = event.target as PeerConnection;
 			this.peers[event.detail.peerId] = connection;
 
@@ -95,24 +149,32 @@ export class PeerPool extends EventTarget {
 			});
 
 			this.dispatchEvent(newPeerConnectedEvent);
-		});
+		}
 
-		connection.addEventListener('connectionFailed', (event: any) => {
-			console.log(`Connection failed with peer ${event.detail.peerId}`);
-		});
+		const onConnectionFailed = (event: ConnectionFailedEvent) => {
+			console.error(`[PEERPOOL] Connection failed with peer ${event.detail.peerId}`);
+		}
 
-		connection.addEventListener('disconnected', (event: any) => {
-			console.log(`Disconnected from peer ${event.detail.peerId}`);
-			delete this.peers[event.detail.peerId];
+		const onConnectionDisconnected = (event: ConnectionDisconnectedEvent) => {
+			console.log(`[PEERPOOL] Disconnected from peer ${event.detail.peerId}`);
+			const peerId = event.detail.peerId
+			delete this.peers[peerId];
 
-			const peerDisconnectedEvent = new CustomEvent('peerDisconnected', {
-				detail: { peerId: event.detail.peerId }
-			});
+			if (this.listenerRegistry[peerId]) {
+				const { connection, handlers } = this.listenerRegistry[peerId];
+				connection.removeEventListener('connectionEstablished', handlers.onConnectionEstablished);
+				connection.removeEventListener('connectionFailed', handlers.onConnectionFailed);
+				connection.removeEventListener('disconnected', handlers.onConnectionDisconnected);
+				connection.removeEventListener('newMessage', handlers.onNewMessage);
+				connection.removeEventListener('iceCandidateSent', handlers.onIceCandidateSent);
+				connection.removeEventListener('iceCandidateReceived', handlers.onIceCandidateReceived);
+				delete this.listenerRegistry[peerId];
+			}
 
-			this.dispatchEvent(peerDisconnectedEvent);
-		});
+			this.dispatchPeerDisconnectedEvent(peerId);
+		}
 
-		connection.addEventListener('newMessage', (event: any) => {
+		const onNewMessage = (event: NewMessageEvent) => {
 			const data = event.detail;
 
 			const newMessageEvent = new CustomEvent('newMessage', {
@@ -123,16 +185,33 @@ export class PeerPool extends EventTarget {
 			});
 
 			this.dispatchEvent(newMessageEvent);
-		});
+		}
 
-		connection.addEventListener('iceCandidateSent', (event: any) => {
-			console.log(`ICE candidate sent to peer ${event.detail.peerId}`);
-		});
+		const onIceCandidateSent = (event: IceCandidateSentEvent) => {
+			console.log(`[PEERPOOL] ICE candidate sent to peer ${event.detail.peerId}`);
+		}
 
-		connection.addEventListener('iceCandidateReceived', (event: any) => {
-			console.log(`ICE candidate received from peer ${event.detail.peerId}`);
-		});
+		const onIceCandidateReceived = (event: IceCandidateReceivedEvent) => {
+			console.log(`[PEERPOOL] ICE candidate received from peer ${event.detail.peerId}`);
+		}
+
+		connection.addEventListener('connectionEstablished', onConnectionEstablished);
+		connection.addEventListener('connectionFailed', onConnectionFailed);
+		connection.addEventListener('disconnected', onConnectionDisconnected);
+		connection.addEventListener('newMessage', onNewMessage);
+		connection.addEventListener('iceCandidateSent', onIceCandidateSent);
+		connection.addEventListener('iceCandidateReceived', onIceCandidateReceived);
+
+		this.listenerRegistry[otherPeerId] = {
+      connection,
+      handlers: { onConnectionEstablished, onConnectionFailed, onConnectionDisconnected, onNewMessage, onIceCandidateSent, onIceCandidateReceived }
+    };
 
 		return connection;
+	}
+
+	private dispatchPeerDisconnectedEvent(peerId: string) {
+		const peerDisconnectedEvent: PeerPoolPeerDisconnectedEvent = new CustomEvent('peerDisconnected', { detail: { peerId } });
+		this.dispatchEvent(peerDisconnectedEvent);
 	}
 }

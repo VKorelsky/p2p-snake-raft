@@ -1,36 +1,36 @@
 import { io, Socket } from 'socket.io-client';
 
-export type SignalerEvent = newOfferEvent | newAnswerEvent | newIceCandidateEvent;
+export type SignalerEvent = NewOfferEvent | NewAnswerEvent | NewIceCandidateEvent;
 export type SignalerEventListener = (event: SignalerEvent) => Promise<void>;
 
-export interface newOfferEvent {
+export interface NewOfferEvent {
 	fromPeerId: string;
-	offer: any;
+	offer: RTCSessionDescriptionInit;
 }
 
-export interface newAnswerEvent {
+export interface NewAnswerEvent {
 	fromPeerId: string;
-	answer: any;
+	answer: RTCSessionDescriptionInit;
 }
 
-export interface newIceCandidateEvent {
+export interface NewIceCandidateEvent {
 	fromPeerId: string;
-	newIceCandidate: any;
+	newIceCandidate: RTCIceCandidateInit | null;
 }
 
 export interface ClientToServerEvents {
 	joinCircle: (circleId: string) => void;
 	leaveCircle: (circleId: string) => void;
-	sendOffer: (toPeerId: string, offer: any) => void;
-	sendAnswer: (toPeerId: string, offer: any) => void;
-	sendIceCandidate: (toPeerId: string, iceCandidate: any) => void;
+	sendOffer: (toPeerId: string, offer: RTCSessionDescriptionInit) => void;
+	sendAnswer: (toPeerId: string, offer: RTCSessionDescriptionInit) => void;
+	sendIceCandidate: (toPeerId: string, iceCandidate: RTCIceCandidateInit) => void;
 }
 
 export interface ServerToClientEvents {
 	newRoomMember: (newPeerId: string) => void;
-	newOffer: (event: newOfferEvent) => void;
-	newAnswer: (event: newAnswerEvent) => void;
-	newIceCandidate: (event: newIceCandidateEvent) => void;
+	newOffer: (event: NewOfferEvent) => void;
+	newAnswer: (event: NewAnswerEvent) => void;
+	newIceCandidate: (event: NewIceCandidateEvent) => void;
 }
 
 export class Signaler extends EventTarget {
@@ -64,15 +64,15 @@ export class Signaler extends EventTarget {
 		this.getSocket().emit('leaveCircle', circleId);
 	}
 
-	public sendOffer(toPeerId: string, offer: any) {
+	public sendOffer(toPeerId: string, offer: RTCSessionDescriptionInit) {
 		this.getSocket().emit('sendOffer', toPeerId, offer);
 	}
 
-	public sendAnswer(toPeerId: string, answer: any) {
+	public sendAnswer(toPeerId: string, answer: RTCSessionDescriptionInit) {
 		this.getSocket().emit('sendAnswer', toPeerId, answer);
 	}
 
-	public sendIceCandidate(toPeerId: string, iceCandidate: any) {
+	public sendIceCandidate(toPeerId: string, iceCandidate: RTCIceCandidateInit) {
 		this.getSocket().emit('sendIceCandidate', toPeerId, iceCandidate);
 	}
 
@@ -109,15 +109,15 @@ export class Signaler extends EventTarget {
 		this.getSocket().on('newRoomMember', listener);
 	}
 
-	public onNewOffer(listener: (event: newOfferEvent) => void) {
+	public onNewOffer(listener: (event: NewOfferEvent) => void) {
 		this.getSocket().on('newOffer', listener);
 	}
 
-	public onNewAnswer(listener: (event: newAnswerEvent) => void) {
+	public onNewAnswer(listener: (event: NewAnswerEvent) => void) {
 		this.getSocket().on('newAnswer', listener);
 	}
 
-	public onNewIceCandidate(listener: (event: newIceCandidateEvent) => void) {
+	public onNewIceCandidate(listener: (event: NewIceCandidateEvent) => void) {
 		this.getSocket().on('newIceCandidate', listener);
 	}
 
